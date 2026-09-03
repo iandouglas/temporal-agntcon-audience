@@ -489,3 +489,11 @@ body {
   line-height: 1.5;
   color: #ffc4ba;
 }
+
+.btn--counters {
+  width: 100%;
+  margin: -8px 0 18px;
+  padding: 10px;
+  font-size: 11px;
+  opacity: 0.8;
+}

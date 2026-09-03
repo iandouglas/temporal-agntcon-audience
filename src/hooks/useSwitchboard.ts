@@ -150,5 +150,8 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
   /** Operator only: open or close the floor to the audience. */
   const arm = useCallback((value: boolean): void => send({ t: "arm", v: value }), [send]);
 
-  return { state, ready, connected, armed, stats, toggle, force, arm };
+  /** Operator only: zero the tap counts and last-call history everywhere. */
+  const resetCounters = useCallback((): void => send({ t: "reset-counters" }), [send]);
+
+  return { state, ready, connected, armed, stats, toggle, force, arm, resetCounters };
 }

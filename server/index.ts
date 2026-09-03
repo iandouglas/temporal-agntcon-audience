@@ -129,6 +129,12 @@ async function admin(
     return;
   }
 
+  if (pathname === "/api/admin/reset-counters" && req.method === "POST") {
+    await hub.resetCounters();
+    json(res, 200, { ok: true });
+    return;
+  }
+
   if (pathname === "/api/admin/state" && req.method === "GET") {
     json(res, 200, {
       ok: true,
@@ -194,6 +200,11 @@ function attach(ws: WebSocket, hub: Hub, control: boolean): void {
     // Opening and closing the floor is an operator action.
     if (message.t === "arm" && control && typeof message.v === "boolean") {
       void hub.setArmed(message.v);
+      return;
+    }
+
+    if (message.t === "reset-counters" && control) {
+      void hub.resetCounters();
       return;
     }
 

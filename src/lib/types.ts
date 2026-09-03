@@ -37,7 +37,8 @@ export type BusEvent =
   | { t: "armed"; v: boolean; ts: number }
   | { t: "full"; state: StateMap; ts: number }
   | { t: "dispatch"; r: DispatchResult }
-  | { t: "taps"; delta: Record<string, number> }
+  | { t: "taps"; delta: Record<string, number>; ts: number }
+  | { t: "reset-counters"; ts: number }
   | { t: "conns"; replica: string; n: number; ts: number };
 
 /** Health of the shared bus, surfaced to the operator. */
@@ -53,6 +54,7 @@ export type ClientMessage =
   | { t: "toggle"; id: string; v: boolean }
   | { t: "force"; id: string; v: boolean }
   | { t: "arm"; v: boolean }
+  | { t: "reset-counters" }
   | { t: "ping" };
 
 /** Server -> browser. */

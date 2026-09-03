@@ -145,12 +145,21 @@ So reseed is only the right tool when you want the board to agree with services
 you are not driving. For a demo where you control everything, the bulk buttons
 are what you want, and `/control` says so next to the reseed button.
 
+**RESET COUNTERS** zeroes the tap counts and last-call lines on every replica
+without touching the switch positions — use it after a rehearsal so the numbers
+on screen are the keynote's. Counters are display-only and live in memory, so a
+tap landing at the exact moment of a reset may not be counted; positions and
+outbound calls are unaffected.
+
 ```bash
 # Read current state without changing anything
 curl -H 'authorization: Bearer <admin_token>' https://<host>/api/admin/state
 
 # Reseed, if you ever do want the services to win
 curl -XPOST -H 'authorization: Bearer <admin_token>' https://<host>/api/admin/reseed
+
+# Zero the counters
+curl -XPOST -H 'authorization: Bearer <admin_token>' https://<host>/api/admin/reset-counters
 ```
 
 If a service shows a red last-POST line on `/control`, the problem is between
@@ -175,5 +184,44 @@ npm run dev             # tsx, with the custom server and hot reload
 app uses an in-process bus and logs a warning.
 
 ```bash
-npm run typecheck       # app and server tsconfigs
+npm run typecheck       # app, server and test tsconfigs
 ```
+
+## Tests
+
+```bash
+npm test                # unit + integration + replication  (~20s)
+npm run test:unit       # pure logic only, no build required (~1s)
+```
+
+`npm test` builds first, then runs three suites against a real server process,
+real WebSockets and real backend services:
+
+| Suite | Covers |
+| --- | --- |
+| `tests/unit.test.ts` | `/health` parsing across every response shape, the token bucket, env parsing and URL validation, the in-process bus |
+| `tests/integration.test.ts` | Boot seeding, URL non-leakage, admin auth, the audience gate, one-POST-per-tap, the rate cap, counter resets, reseed |
+| `tests/replication.test.ts` | Two replicas agreeing, seed-lock election, a 300-socket crowd, a mid-demo restart, a Redis outage and recovery |
+
+The replication suite needs `redis-server` on PATH and **skips with a message**
+if it is missing, so the suite still runs usefully without it.
+
+### Browser tests
+
+`tests/browser.test.ts` drives WebKit — the audience is overwhelmingly on iOS
+Safari, and it is the engine most likely to disagree about `dvh` units and
+`-webkit-text-stroke`. It checks that all five switches fit every phone
+viewport with no scrolling, that the ON/OFF type renders at exactly 24pt/12pt
+with the right colour, outline and glow, and that the gate and bulk buttons
+behave as the room would see them.
+
+Playwright is deliberately **not** a dependency — the package downloads several
+hundred megabytes of browsers on install, which would land in every Railway
+build for no benefit. Install it only when you want to run these:
+
+```bash
+npm i --no-save playwright && npx playwright install webkit
+npm run test:ui
+```
+
+Without it the suite skips rather than fails.

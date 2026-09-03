@@ -10,8 +10,12 @@
     "dev": "tsx watch --clear-screen=false server/index.ts",
     "build": "next build && tsc -p tsconfig.server.json",
     "start": "node dist/server/index.js",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
-    "lint": "next lint"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.test.json",
+    "lint": "next lint",
+    "pretest": "npm run build",
+    "test": "node --import tsx --test tests/unit.test.ts tests/integration.test.ts tests/replication.test.ts",
+    "test:unit": "node --import tsx --test tests/unit.test.ts",
+    "test:ui": "npm run build && node --import tsx --test tests/browser.test.ts"
   },
   "dependencies": {
     "ioredis": "^5.4.2",

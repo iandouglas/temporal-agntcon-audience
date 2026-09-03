@@ -118,7 +118,12 @@ export function validateServices(services: ServiceConfig[]): string[] {
       continue;
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      problems.push(`${envName}="${service.baseUrl}" uses ${parsed.protocol}; expected http: or https:`);
+      // A bare "host:8080" parses as a URL whose scheme is "host:", so the
+      // missing-scheme typo lands here rather than in the catch above.
+      problems.push(
+        `${envName}="${service.baseUrl}" is missing an http:// or https:// scheme (read as "${parsed.protocol}")`,
+      );
+      continue;
     }
     if (parsed.hostname.endsWith(".railway.internal") && !parsed.port) {
       problems.push(

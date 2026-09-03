@@ -54,6 +54,12 @@ export class Hub {
   private pendingTaps: Record<string, number> = {};
   private lastDispatch: Record<string, DispatchResult | null> = {};
   private peerConns = new Map<string, { n: number; ts: number }>();
+  /**
+   * When counters were last reset. Events stamped before this are dropped:
+   * a dispatch result or tap delta already in flight when the operator pressed
+   * reset would otherwise land afterwards and repopulate what was just cleared.
+   */
+  private countersResetAt = 0;
   private busFailures = 0;
   private lastBusError: string | null = null;
   private clients = new Set<Client>();
@@ -217,6 +223,29 @@ export class Hub {
     console.log(`[arm] audience controls ${value ? "UNLOCKED" : "LOCKED"}`);
   }
 
+  /**
+   * Zero the tap counts and last-call history on every replica.
+   *
+   * Counters are in memory only, so this is not persisted -- it exists so the
+   * operator page shows the keynote's numbers rather than the rehearsal's.
+   * Toggle positions are deliberately untouched.
+   */
+  async resetCounters(): Promise<void> {
+    // Drop pending deltas first, or an in-flight flush re-adds them.
+    this.pendingTaps = {};
+    this.countersResetAt = Date.now();
+    await this.replicate({ t: "reset-counters", ts: this.countersResetAt });
+    console.log("[counters] reset");
+  }
+
+  private applyCounterReset(): void {
+    this.pendingTaps = {};
+    for (const service of this.services) {
+      this.taps[service.id] = 0;
+      this.lastDispatch[service.id] = null;
+    }
+  }
+
   /** Wipe the stored state and re-seed from /health. Used by the operator reseed. */
   async reseed(): Promise<StateMap> {
     await this.bus.clearState().catch(() => undefined);
@@ -291,12 +320,18 @@ export class Hub {
         this.broadcast({ t: "full", state: this.getState(), ts: event.ts });
         break;
       case "dispatch":
-        this.lastDispatch[event.r.id] = event.r;
+        if (event.r.at >= this.countersResetAt) this.lastDispatch[event.r.id] = event.r;
         break;
       case "taps":
-        for (const [id, delta] of Object.entries(event.delta)) {
-          this.taps[id] = (this.taps[id] ?? 0) + delta;
+        if (event.ts >= this.countersResetAt) {
+          for (const [id, delta] of Object.entries(event.delta)) {
+            this.taps[id] = (this.taps[id] ?? 0) + delta;
+          }
         }
+        break;
+      case "reset-counters":
+        this.countersResetAt = Math.max(this.countersResetAt, event.ts);
+        this.applyCounterReset();
         break;
       case "conns":
         this.peerConns.set(event.replica, { n: event.n, ts: event.ts });
@@ -308,7 +343,7 @@ export class Hub {
     const delta = this.pendingTaps;
     if (Object.keys(delta).length === 0) return;
     this.pendingTaps = {};
-    await this.replicate({ t: "taps", delta });
+    await this.replicate({ t: "taps", delta, ts: Date.now() });
   }
 
   private async announceConns(): Promise<void> {

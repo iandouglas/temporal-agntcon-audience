@@ -25,7 +25,10 @@ function describe(result: DispatchResult | null | undefined): string {
 }
 
 export function ControlPanel({ services, token }: Props) {
-  const { state, connected, armed, stats, force, arm } = useSwitchboard(services, { control: true, token });
+  const { state, connected, armed, stats, force, arm, resetCounters } = useSwitchboard(services, {
+    control: true,
+    token,
+  });
   const [reseeding, setReseeding] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -102,6 +105,10 @@ export function ControlPanel({ services, token }: Props) {
           <div className="stat-v">{stats ? (stats.bus.healthy ? "OK" : "DEGRADED") : "—"}</div>
         </div>
       </div>
+
+      <button type="button" className="btn btn--counters" onClick={resetCounters}>
+        RESET COUNTERS
+      </button>
 
       {stats && !stats.bus.healthy ? (
         <p className="ctl-alert">
