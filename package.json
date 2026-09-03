@@ -1,0 +1,32 @@
+{
+  "name": "audience-site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Keynote audience switchboard: five toggles, WebSocket fanout, private backend service calls.",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false server/index.ts",
+    "build": "next build && tsc -p tsconfig.server.json",
+    "start": "node dist/server/index.js",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "ioredis": "^5.4.2",
+    "next": "^15.5.4",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "undici": "^7.4.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@types/ws": "^8.18.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

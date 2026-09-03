@@ -1,0 +1,96 @@
+"use client";
+
+import { useState } from "react";
+import { useSwitchboard } from "../../hooks/useSwitchboard";
+import type { DispatchResult, PublicService } from "../../lib/types";
+
+interface Props {
+  services: PublicService[];
+  token: string;
+}
+
+function describe(result: DispatchResult | null | undefined): string {
+  if (!result) return "no call yet";
+  const when = new Date(result.at).toLocaleTimeString();
+  if (result.error) return `/${result.path} → ${result.error} (${result.ms}ms) ${when}`;
+  return `/${result.path} → ${result.status} (${result.ms}ms) ${when}`;
+}
+
+export function ControlPanel({ services, token }: Props) {
+  const { state, connected, stats, force } = useSwitchboard(services, { control: true, token });
+  const [reseeding, setReseeding] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const totalTaps = Object.values(stats?.taps ?? {}).reduce((sum, n) => sum + n, 0);
+
+  async function reseed(): Promise<void> {
+    if (!window.confirm("Wipe stored state and re-read /health on every service?")) return;
+    setReseeding(true);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/admin/reseed", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      const body = (await res.json()) as { ok?: boolean; error?: string };
+      setNotice(body.ok ? "re-seeded from /health" : `failed: ${body.error ?? res.status}`);
+    } catch (err) {
+      setNotice(`failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setReseeding(false);
+    }
+  }
+
+  return (
+    <main className="control">
+      <h1>Control</h1>
+      <p className="control-sub">
+        {connected ? "connected" : "reconnecting…"}
+        {notice ? ` · ${notice}` : ""}
+      </p>
+
+      <div className="stat-row">
+        <div className="stat">
+          <div className="stat-k">Connected</div>
+          <div className="stat-v">{stats?.conns ?? "—"}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-k">Total taps</div>
+          <div className="stat-v">{stats ? totalTaps : "—"}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-k">Toggles on</div>
+          <div className="stat-v">{Object.values(state).filter(Boolean).length}</div>
+        </div>
+      </div>
+
+      {services.map((service) => {
+        const on = state[service.id] ?? false;
+        const last = stats?.dispatch?.[service.id];
+        return (
+          <div className="ctl-service" key={service.id}>
+            <div className="ctl-name">
+              {service.name}
+              {service.kind === "mcp" ? " ·  mcp" : ""}
+            </div>
+            <div className="ctl-buttons">
+              <button type="button" className="btn" data-active={!on} onClick={() => force(service.id, false)}>
+                OFF
+              </button>
+              <button type="button" className="btn" data-active={on} onClick={() => force(service.id, true)}>
+                ON
+              </button>
+            </div>
+            <div className="ctl-meta" data-bad={Boolean(last && !last.ok)}>
+              {stats?.taps?.[service.id] ?? 0} taps · {describe(last)}
+            </div>
+          </div>
+        );
+      })}
+
+      <button type="button" className="btn btn--wide" onClick={() => void reseed()} disabled={reseeding}>
+        {reseeding ? "RE-SEEDING…" : "RESEED FROM /HEALTH"}
+      </button>
+    </main>
+  );
+}
