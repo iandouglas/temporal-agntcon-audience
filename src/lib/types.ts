@@ -40,6 +40,14 @@ export type BusEvent =
   | { t: "taps"; delta: Record<string, number> }
   | { t: "conns"; replica: string; n: number; ts: number };
 
+/** Health of the shared bus, surfaced to the operator. */
+export interface BusStatus {
+  kind: string;
+  healthy: boolean;
+  failures: number;
+  lastError: string | null;
+}
+
 /** Browser -> server. */
 export type ClientMessage =
   | { t: "toggle"; id: string; v: boolean }
@@ -53,5 +61,11 @@ export type ServerMessage =
   | { t: "state"; id: string; v: boolean; ts: number }
   | { t: "armed"; v: boolean; ts: number }
   | { t: "full"; state: StateMap; ts: number }
-  | { t: "stats"; conns: number; taps: Record<string, number>; dispatch: Record<string, DispatchResult | null> }
+  | {
+      t: "stats";
+      conns: number;
+      taps: Record<string, number>;
+      dispatch: Record<string, DispatchResult | null>;
+      bus: BusStatus;
+    }
   | { t: "pong" };

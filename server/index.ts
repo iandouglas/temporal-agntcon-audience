@@ -92,7 +92,14 @@ async function route(
   const { pathname } = parseUrl(req);
 
   if (pathname === "/healthz") {
-    json(res, 200, { ok: true, replica: hub.replicaId, conns: hub.totalConns(), pool: poolStats() });
+    json(res, 200, {
+      ok: true,
+      replica: hub.replicaId,
+      conns: hub.totalConns(),
+      armed: hub.isArmed(),
+      bus: hub.busStatus(),
+      pool: poolStats(),
+    });
     return;
   }
 
@@ -128,6 +135,7 @@ async function admin(
       replica: hub.replicaId,
       conns: hub.totalConns(),
       armed: hub.isArmed(),
+      bus: hub.busStatus(),
       state: hub.getState(),
       pool: poolStats(),
       services: hub.services.map((s) => ({ id: s.id, name: s.name, kind: s.kind, configured: Boolean(s.baseUrl) })),
@@ -231,7 +239,20 @@ function reject(socket: Duplex, status: number, message: string): void {
   socket.destroy();
 }
 
+/*
+ * Last-resort net. During a live demo, staying up and degraded beats exiting:
+ * a crashed process takes every phone in the room down with it, while a logged
+ * error usually costs one tap. Anything reaching here is a bug worth chasing
+ * afterwards, so it is logged loudly rather than swallowed.
+ */
+process.on("unhandledRejection", (reason: unknown) => {
+  console.error("[server] unhandled rejection (continuing):", reason);
+});
+process.on("uncaughtException", (err: unknown) => {
+  console.error("[server] uncaught exception (continuing):", err);
+});
+
 main().catch((err: unknown) => {
-  console.error("[server] fatal:", err);
+  console.error("[server] fatal during startup:", err);
   process.exit(1);
 });

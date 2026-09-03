@@ -474,3 +474,18 @@ body {
 .ctl-note--tight {
   margin: 8px 2px 0;
 }
+
+.stat[data-bad="true"] .stat-v {
+  color: #ff9a8a;
+}
+
+.ctl-alert {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 154, 138, 0.45);
+  border-radius: 12px;
+  background: rgba(255, 154, 138, 0.1);
+  font-size: 12px;
+  line-height: 1.5;
+  color: #ffc4ba;
+}

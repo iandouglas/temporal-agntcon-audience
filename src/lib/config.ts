@@ -97,6 +97,41 @@ export function redisUrl(): string | undefined {
   return env("REDIS_URL") ?? env("REDIS_PRIVATE_URL") ?? env("redis_url");
 }
 
+/**
+ * Check every configured URL at boot rather than discovering a typo one tap at
+ * a time. Returns human-readable problems; the caller logs them and carries on,
+ * since a broken URL should not stop the rest of the board from working.
+ */
+export function validateServices(services: ServiceConfig[]): string[] {
+  const problems: string[] = [];
+  for (const service of services) {
+    const envName = service.id === "mcp" ? "mcp_url" : `${service.id}_url`;
+    if (!service.baseUrl) {
+      problems.push(`${envName} is not set — "${service.name}" will toggle but call nothing.`);
+      continue;
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(service.baseUrl);
+    } catch {
+      problems.push(`${envName}="${service.baseUrl}" is not a valid URL. It needs a scheme, e.g. http://host:8080`);
+      continue;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      problems.push(`${envName}="${service.baseUrl}" uses ${parsed.protocol}; expected http: or https:`);
+    }
+    if (parsed.hostname.endsWith(".railway.internal") && !parsed.port) {
+      problems.push(
+        `${envName}="${service.baseUrl}" is a Railway private address with no port. Internal URLs need one, e.g. http://${parsed.hostname}:8080`,
+      );
+    }
+    if (parsed.search || parsed.hash) {
+      problems.push(`${envName}="${service.baseUrl}" has a query string or fragment; it should be a bare base URL.`);
+    }
+  }
+  return problems;
+}
+
 /** Reset the memoized service list. Only used by tests and the reseed path. */
 export function resetConfigCache(): void {
   cached = null;

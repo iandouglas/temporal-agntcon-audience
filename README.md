@@ -37,6 +37,13 @@ switch stops an honest phone, but only the server stops a console. It lives in
 Redis (`switchboard:armed`), so it survives a redeploy: if the floor was open
 when a replica restarted, it comes back open.
 
+**Redis is not a single point of failure.** If it goes down mid-demo, every
+write falls back to serving this replica's own clients, so the room keeps
+working — switches move, POSTs fire, the gate still holds. Only cross-replica
+agreement is lost, and `/control` shows the bus as DEGRADED so you know. When
+Redis returns, local state is pushed back into it, because local state absorbed
+every tap during the outage while the stored copy was frozen.
+
 **One POST per tap, unthrottled.** The live crowd load is part of the demo, so
 taps are not coalesced. Fifty people tapping in a second is fifty calls.
 
@@ -148,7 +155,9 @@ curl -XPOST -H 'authorization: Bearer <admin_token>' https://<host>/api/admin/re
 
 If a service shows a red last-POST line on `/control`, the problem is between
 this app and that service, not between the phones and this app — the connected
-count and tap counts will still be climbing.
+count and tap counts will still be climbing. The **Bus** tile tells you the
+other half: `OK` means replicas are in step, `DEGRADED` means Redis is
+unreachable and each replica is serving its own clients in isolation.
 
 A redeploy mid-demo is safe: state lives in Redis, and phones reconnect on their
 own with exponential backoff and resync. The page shows `reconnecting…` while

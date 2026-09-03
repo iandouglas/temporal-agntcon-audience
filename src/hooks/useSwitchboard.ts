@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DispatchResult, PublicService, ServerMessage, StateMap } from "../lib/types";
+import type { BusStatus, DispatchResult, PublicService, ServerMessage, StateMap } from "../lib/types";
 
 export interface Stats {
   conns: number;
   taps: Record<string, number>;
   dispatch: Record<string, DispatchResult | null>;
+  bus: BusStatus;
 }
 
 interface Options {
@@ -92,7 +93,12 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
             setState((prev) => ({ ...prev, [message.id]: message.v }));
             break;
           case "stats":
-            setStats({ conns: message.conns, taps: message.taps, dispatch: message.dispatch });
+            setStats({
+              conns: message.conns,
+              taps: message.taps,
+              dispatch: message.dispatch,
+              bus: message.bus,
+            });
             break;
           case "pong":
             break;

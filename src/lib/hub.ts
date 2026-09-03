@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { Bus } from "./bus";
 import { createBus } from "./bus";
-import { getServices, redisUrl } from "./config";
+import { getServices, redisUrl, validateServices } from "./config";
 import { dispatchToggle, probeAll } from "./dispatch";
 import { TokenBucket } from "./ratelimit";
 import type {
   BusEvent,
+  BusStatus,
   DispatchResult,
   ServerMessage,
   ServiceConfig,
@@ -53,6 +54,8 @@ export class Hub {
   private pendingTaps: Record<string, number> = {};
   private lastDispatch: Record<string, DispatchResult | null> = {};
   private peerConns = new Map<string, { n: number; ts: number }>();
+  private busFailures = 0;
+  private lastBusError: string | null = null;
   private clients = new Set<Client>();
   private timers: NodeJS.Timeout[] = [];
 
@@ -60,18 +63,82 @@ export class Hub {
     return this.services.find((service) => service.id === id);
   }
 
+  /**
+   * Replicate an event through the bus, falling back to this replica alone.
+   *
+   * Redis is how replicas agree on ordering, but it is not allowed to be a
+   * single point of failure during a live demo. If it is unreachable we still
+   * serve our own clients, so the room keeps working -- replicas may diverge
+   * until Redis returns, at which point `resyncAfterOutage` pushes local state
+   * back out.
+   */
+  private async replicate(event: BusEvent, write?: () => Promise<void>): Promise<void> {
+    try {
+      if (write) await write();
+      await this.bus.publish(event);
+    } catch (err) {
+      this.busFailures += 1;
+      const message = err instanceof Error ? err.message : String(err);
+      if (this.lastBusError !== message) {
+        this.lastBusError = message;
+        console.error(`[bus] degraded, serving local clients only: ${message}`);
+      }
+      this.applyBusEvent(event);
+    }
+  }
+
+  /** True when the bus is healthy enough to keep replicas in step. */
+  busHealthy(): boolean {
+    return this.bus.connected;
+  }
+
+  busStatus(): BusStatus {
+    return {
+      kind: this.bus.kind,
+      healthy: this.bus.connected,
+      failures: this.busFailures,
+      lastError: this.lastBusError,
+    };
+  }
+
+  /**
+   * Redis came back. Local state is the truth -- it absorbed every tap during
+   * the outage, while the stored copy is frozen at the moment Redis died.
+   */
+  private async resyncAfterOutage(attempt = 1): Promise<void> {
+    try {
+      await this.bus.putState(this.state);
+      await this.bus.setArmed(this.armed);
+      await this.bus.publish({ t: "full", state: this.getState(), ts: Date.now() });
+      await this.bus.publish({ t: "armed", v: this.armed, ts: Date.now() });
+      this.lastBusError = null;
+      console.log("[bus] recovered, pushed local state back to Redis");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (attempt < 3) {
+        setTimeout(() => void this.resyncAfterOutage(attempt + 1), 1000 * attempt);
+        return;
+      }
+      console.error(`[bus] resync failed after ${attempt} attempts: ${message}`);
+    }
+  }
+
   async start(): Promise<void> {
     for (const service of this.services) {
       this.state[service.id] = false;
       this.taps[service.id] = 0;
       this.lastDispatch[service.id] = null;
-      if (!service.baseUrl) {
-        console.warn(`[config] ${service.id} ("${service.name}") has no URL configured -- its switch will toggle but call nothing.`);
-      }
+    }
+
+    const problems = validateServices(this.services);
+    for (const problem of problems) console.warn(`[config] ${problem}`);
+    if (problems.length === 0) {
+      console.log(`[config] all ${this.services.length} service URLs look well-formed`);
     }
 
     this.bus = await createBus(redisUrl());
     this.bus.subscribe((event) => this.applyBusEvent(event));
+    this.bus.onReconnect(() => void this.resyncAfterOutage());
     await this.seed();
 
     this.timers.push(setInterval(() => void this.flushTaps(), TAP_FLUSH_MS));
@@ -90,19 +157,19 @@ export class Hub {
   private async seed(): Promise<void> {
     await this.seedArmed();
 
-    const existing = await this.bus.getState();
+    const existing = await this.bus.getState().catch(() => null);
     if (existing) {
       this.mergeState(existing);
       console.log(`[seed] adopted existing state from ${this.bus.kind}:`, this.state);
       return;
     }
 
-    const won = await this.bus.acquireSeedLock(SEED_LOCK_TTL_SECONDS);
+    const won = await this.bus.acquireSeedLock(SEED_LOCK_TTL_SECONDS).catch(() => true);
     if (!won) {
       const deadline = Date.now() + SEED_WAIT_MS;
       while (Date.now() < deadline) {
         await sleep(SEED_POLL_MS);
-        const seeded = await this.bus.getState();
+        const seeded = await this.bus.getState().catch(() => null);
         if (seeded) {
           this.mergeState(seeded);
           console.log("[seed] adopted state seeded by another replica:", this.state);
@@ -115,9 +182,10 @@ export class Hub {
     console.log("[seed] cold start -- probing /health on every service");
     const probed = await probeAll(this.services);
     this.mergeState(probed);
-    await this.bus.putState(this.state);
-    await this.bus.publish({ t: "full", state: { ...this.state }, ts: Date.now() });
-    await this.bus.releaseSeedLock();
+    await this.replicate({ t: "full", state: { ...this.state }, ts: Date.now() }, async () => {
+      await this.bus.putState(this.state);
+    });
+    await this.bus.releaseSeedLock().catch(() => undefined);
     console.log("[seed] seeded from /health:", this.state);
   }
 
@@ -127,10 +195,10 @@ export class Hub {
    * mid-demo does not silently lock the room out.
    */
   private async seedArmed(): Promise<void> {
-    const stored = await this.bus.getArmed();
+    const stored = await this.bus.getArmed().catch(() => null);
     if (stored === null) {
       this.armed = false;
-      await this.bus.setArmed(false);
+      await this.bus.setArmed(false).catch(() => undefined);
       console.log("[seed] audience controls default to LOCKED");
       return;
     }
@@ -145,19 +213,19 @@ export class Hub {
   /** Open or close the floor. Operator action only. */
   async setArmed(value: boolean): Promise<void> {
     this.armed = value;
-    await this.bus.setArmed(value);
-    await this.bus.publish({ t: "armed", v: value, ts: Date.now() });
+    await this.replicate({ t: "armed", v: value, ts: Date.now() }, () => this.bus.setArmed(value));
     console.log(`[arm] audience controls ${value ? "UNLOCKED" : "LOCKED"}`);
   }
 
   /** Wipe the stored state and re-seed from /health. Used by the operator reseed. */
   async reseed(): Promise<StateMap> {
-    await this.bus.clearState();
-    await this.bus.releaseSeedLock();
+    await this.bus.clearState().catch(() => undefined);
+    await this.bus.releaseSeedLock().catch(() => undefined);
     const probed = await probeAll(this.services);
     for (const service of this.services) this.state[service.id] = probed[service.id] ?? false;
-    await this.bus.putState(this.state);
-    await this.bus.publish({ t: "full", state: { ...this.state }, ts: Date.now() });
+    await this.replicate({ t: "full", state: { ...this.state }, ts: Date.now() }, async () => {
+      await this.bus.putState(this.state);
+    });
     console.log("[reseed] re-seeded from /health:", this.state);
     return { ...this.state };
   }
@@ -196,15 +264,16 @@ export class Hub {
     }
 
     this.state[id] = value;
-    await this.bus.setField(id, value);
-    await this.bus.publish({ t: "state", id, v: value, ts: Date.now() });
+    await this.replicate({ t: "state", id, v: value, ts: Date.now() }, () =>
+      this.bus.setField(id, value),
+    );
   }
 
   private async fireAndRecord(service: ServiceConfig, value: boolean): Promise<void> {
     const result = await dispatchToggle(service, value);
     if (!result) return;
     this.lastDispatch[service.id] = result;
-    await this.bus.publish({ t: "dispatch", r: result });
+    await this.replicate({ t: "dispatch", r: result });
   }
 
   private applyBusEvent(event: BusEvent): void {
@@ -239,11 +308,11 @@ export class Hub {
     const delta = this.pendingTaps;
     if (Object.keys(delta).length === 0) return;
     this.pendingTaps = {};
-    await this.bus.publish({ t: "taps", delta });
+    await this.replicate({ t: "taps", delta });
   }
 
   private async announceConns(): Promise<void> {
-    await this.bus.publish({
+    await this.replicate({
       t: "conns",
       replica: this.replicaId,
       n: this.clients.size,
@@ -291,6 +360,7 @@ export class Hub {
       conns: this.totalConns(),
       taps: { ...this.taps },
       dispatch: { ...this.lastDispatch },
+      bus: this.busStatus(),
     });
   }
 

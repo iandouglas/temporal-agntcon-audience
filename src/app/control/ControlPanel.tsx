@@ -97,7 +97,19 @@ export function ControlPanel({ services, token }: Props) {
           <div className="stat-k">Toggles on</div>
           <div className="stat-v">{Object.values(state).filter(Boolean).length}</div>
         </div>
+        <div className="stat" data-bad={stats ? !stats.bus.healthy : false}>
+          <div className="stat-k">Bus ({stats?.bus.kind ?? "—"})</div>
+          <div className="stat-v">{stats ? (stats.bus.healthy ? "OK" : "DEGRADED") : "—"}</div>
+        </div>
       </div>
+
+      {stats && !stats.bus.healthy ? (
+        <p className="ctl-alert">
+          Redis is unreachable. Switches still work and every phone connected to
+          this replica still updates — but replicas will drift apart until it is
+          back. {stats.bus.failures} failed write{stats.bus.failures === 1 ? "" : "s"}.
+        </p>
+      ) : null}
 
       {services.map((service) => {
         const on = state[service.id] ?? false;

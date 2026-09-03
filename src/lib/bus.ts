@@ -35,6 +35,8 @@ export interface Bus {
   releaseSeedLock(): Promise<void>;
   publish(event: BusEvent): Promise<void>;
   subscribe(handler: (event: BusEvent) => void): void;
+  /** Fired when the bus recovers after an outage, so callers can re-sync. */
+  onReconnect(handler: () => void): void;
   close(): Promise<void>;
 }
 
@@ -106,6 +108,10 @@ class MemoryBus implements Bus {
     this.handlers.push(handler);
   }
 
+  onReconnect(): void {
+    // An in-process bus never drops.
+  }
+
   async close(): Promise<void> {
     this.handlers = [];
   }
@@ -130,19 +136,25 @@ class RedisBus implements Bus {
   private client!: RedisLike;
   private subscriber!: RedisLike;
   private handlers: Array<(event: BusEvent) => void> = [];
-  private up = false;
+  private reconnectHandlers: Array<() => void> = [];
+  private ready = { client: false, subscriber: false };
+  private wasDown = false;
 
   constructor(private readonly url: string) {}
 
   get connected(): boolean {
-    return this.up;
+    return this.ready.client && this.ready.subscriber;
   }
 
   async connect(): Promise<void> {
     const { default: Redis } = await import("ioredis");
     const options = {
-      maxRetriesPerRequest: 3,
+      maxRetriesPerRequest: 1,
       enableReadyCheck: true,
+      // Fail commands immediately while disconnected instead of queueing them.
+      // A tap must not sit waiting on Redis: the caller has a local fallback and
+      // the room needs the switch to move now.
+      enableOfflineQueue: false,
       retryStrategy: (times: number) => Math.min(times * 200, 3000),
       // Railway's private networking is IPv6-only.
       family: this.url.includes(".railway.internal") ? 6 : undefined,
@@ -156,13 +168,29 @@ class RedisBus implements Bus {
       ["subscriber", this.subscriber],
     ] as const) {
       conn.on("error", ((err: Error) => {
-        this.up = false;
-        console.error(`[redis:${label}] ${err.message}`);
+        if (this.ready[label]) console.error(`[redis:${label}] lost connection: ${err.message}`);
+        this.ready[label] = false;
+        this.wasDown = true;
       }) as never);
       conn.on("ready", (() => {
-        this.up = true;
+        this.ready[label] = true;
+        // Both connections must be back before we re-sync: the resync writes
+        // over the command connection, and firing on the subscriber alone lands
+        // on a socket that is not writeable yet.
+        if (this.wasDown && this.connected) {
+          this.wasDown = false;
+          console.log("[redis] reconnected");
+          for (const handler of this.reconnectHandlers) handler();
+        }
       }) as never);
     }
+
+    // With the offline queue disabled, a command issued before the socket is
+    // ready fails outright -- so wait for both connections rather than letting
+    // the very first subscribe() drop us to the in-process fallback.
+    await Promise.all([waitForReady(this.client, "client"), waitForReady(this.subscriber, "subscriber")]);
+    this.ready.client = true;
+    this.ready.subscriber = true;
 
     this.subscriber.on("message", ((_channel: string, message: string) => {
       let event: BusEvent;
@@ -175,7 +203,6 @@ class RedisBus implements Bus {
     }) as never);
 
     await this.subscriber.subscribe(CHANNEL);
-    this.up = true;
   }
 
   async getState(): Promise<StateMap | null> {
@@ -225,10 +252,44 @@ class RedisBus implements Bus {
     this.handlers.push(handler);
   }
 
+  onReconnect(handler: () => void): void {
+    this.reconnectHandlers.push(handler);
+  }
+
   async close(): Promise<void> {
     this.handlers = [];
+    this.reconnectHandlers = [];
     await Promise.allSettled([this.client.quit(), this.subscriber.quit()]);
   }
+}
+
+const READY_TIMEOUT_MS = 10_000;
+
+function waitForReady(conn: RedisLike, label: string): Promise<void> {
+  if (conn.status === "ready") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`${label} did not become ready within ${READY_TIMEOUT_MS}ms`));
+    }, READY_TIMEOUT_MS);
+
+    const onReady = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onError = (err: Error): void => {
+      cleanup();
+      reject(err);
+    };
+    function cleanup(): void {
+      clearTimeout(timer);
+      (conn as unknown as { off(e: string, l: unknown): void }).off("ready", onReady);
+      (conn as unknown as { off(e: string, l: unknown): void }).off("error", onError);
+    }
+
+    conn.on("ready", onReady as never);
+    conn.on("error", onError as never);
+  });
 }
 
 export async function createBus(url: string | undefined): Promise<Bus> {
