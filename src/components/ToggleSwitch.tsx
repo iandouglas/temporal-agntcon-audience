@@ -6,6 +6,8 @@ interface Props {
   service: PublicService;
   on: boolean;
   onToggle: (value: boolean) => void;
+  /** Renders the switch inert -- used while the floor is closed to the audience. */
+  disabled?: boolean;
 }
 
 /**
@@ -15,7 +17,7 @@ interface Props {
  * words are decorative for assistive tech (the accessible name carries the same
  * information) so they are hidden from it to avoid reading the label twice.
  */
-export function ToggleSwitch({ service, on, onToggle }: Props) {
+export function ToggleSwitch({ service, on, onToggle, disabled = false }: Props) {
   return (
     <div className={`card${service.kind === "mcp" ? " card--mcp" : ""}`}>
       <p className="card-name">{service.name}</p>
@@ -25,6 +27,7 @@ export function ToggleSwitch({ service, on, onToggle }: Props) {
         aria-checked={on}
         aria-label={service.name}
         data-on={on}
+        disabled={disabled}
         className="switch"
         onClick={() => onToggle(!on)}
       >

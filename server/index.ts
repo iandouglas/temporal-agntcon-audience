@@ -127,6 +127,7 @@ async function admin(
       ok: true,
       replica: hub.replicaId,
       conns: hub.totalConns(),
+      armed: hub.isArmed(),
       state: hub.getState(),
       pool: poolStats(),
       services: hub.services.map((s) => ({ id: s.id, name: s.name, kind: s.kind, configured: Boolean(s.baseUrl) })),
@@ -178,14 +179,20 @@ function attach(ws: WebSocket, hub: Hub, control: boolean): void {
     }
 
     if (message.t === "toggle" && typeof message.id === "string" && typeof message.v === "boolean") {
-      void hub.toggle(message.id, message.v, { rateLimited: true, bucket: client.bucket });
+      void hub.toggle(message.id, message.v, { operator: false, bucket: client.bucket });
+      return;
+    }
+
+    // Opening and closing the floor is an operator action.
+    if (message.t === "arm" && control && typeof message.v === "boolean") {
+      void hub.setArmed(message.v);
       return;
     }
 
     // Operator forces bypass the rate limit: there is exactly one of them and
     // they are the escape hatch when something looks wrong on stage.
     if (message.t === "force" && control && typeof message.id === "string" && typeof message.v === "boolean") {
-      void hub.toggle(message.id, message.v, { rateLimited: false });
+      void hub.toggle(message.id, message.v, { operator: true });
     }
   });
 

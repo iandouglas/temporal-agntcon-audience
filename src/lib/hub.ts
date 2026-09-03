@@ -43,6 +43,12 @@ export class Hub {
 
   private bus!: Bus;
   private state: StateMap = {};
+  /**
+   * Whether the audience may drive the switches. Defaults to locked: a phone
+   * that scans the QR code early must not be able to touch anything before the
+   * operator opens the floor.
+   */
+  private armed = false;
   private taps: Record<string, number> = {};
   private pendingTaps: Record<string, number> = {};
   private lastDispatch: Record<string, DispatchResult | null> = {};
@@ -82,6 +88,8 @@ export class Hub {
    * discard the crowd's work. Only a genuinely cold start seeds from /health.
    */
   private async seed(): Promise<void> {
+    await this.seedArmed();
+
     const existing = await this.bus.getState();
     if (existing) {
       this.mergeState(existing);
@@ -111,6 +119,35 @@ export class Hub {
     await this.bus.publish({ t: "full", state: { ...this.state }, ts: Date.now() });
     await this.bus.releaseSeedLock();
     console.log("[seed] seeded from /health:", this.state);
+  }
+
+  /**
+   * Read the audience gate, defaulting to locked when it has never been set.
+   * A restarting replica adopts whatever the operator last chose, so a redeploy
+   * mid-demo does not silently lock the room out.
+   */
+  private async seedArmed(): Promise<void> {
+    const stored = await this.bus.getArmed();
+    if (stored === null) {
+      this.armed = false;
+      await this.bus.setArmed(false);
+      console.log("[seed] audience controls default to LOCKED");
+      return;
+    }
+    this.armed = stored;
+    console.log(`[seed] audience controls are ${stored ? "UNLOCKED" : "LOCKED"}`);
+  }
+
+  isArmed(): boolean {
+    return this.armed;
+  }
+
+  /** Open or close the floor. Operator action only. */
+  async setArmed(value: boolean): Promise<void> {
+    this.armed = value;
+    await this.bus.setArmed(value);
+    await this.bus.publish({ t: "armed", v: value, ts: Date.now() });
+    console.log(`[arm] audience controls ${value ? "UNLOCKED" : "LOCKED"}`);
   }
 
   /** Wipe the stored state and re-seed from /health. Used by the operator reseed. */
@@ -143,13 +180,17 @@ export class Hub {
    * rate limiter suppresses only the POST. A throttled client still sees, and
    * still shares, a responsive UI.
    */
-  async toggle(id: string, value: boolean, options: { rateLimited: boolean; bucket?: TokenBucket }): Promise<void> {
+  async toggle(id: string, value: boolean, options: { operator: boolean; bucket?: TokenBucket }): Promise<void> {
     const service = this.byId(id);
     if (!service) return;
 
+    // The gate is enforced here, not just in the UI. A greyed-out switch stops
+    // an honest phone; this stops a console.
+    if (!options.operator && !this.armed) return;
+
     this.pendingTaps[id] = (this.pendingTaps[id] ?? 0) + 1;
 
-    const allowed = !options.rateLimited || (options.bucket?.take() ?? true);
+    const allowed = options.operator || (options.bucket?.take() ?? true);
     if (allowed) {
       void this.fireAndRecord(service, value);
     }
@@ -171,6 +212,10 @@ export class Hub {
       case "state":
         this.state[event.id] = event.v;
         this.broadcast({ t: "state", id: event.id, v: event.v, ts: event.ts });
+        break;
+      case "armed":
+        this.armed = event.v;
+        this.broadcast({ t: "armed", v: event.v, ts: event.ts });
         break;
       case "full":
         this.mergeState(event.state);
@@ -220,7 +265,7 @@ export class Hub {
 
   addClient(client: Client): void {
     this.clients.add(client);
-    client.send({ t: "hello", state: this.getState(), ts: Date.now() });
+    client.send({ t: "hello", state: this.getState(), armed: this.armed, ts: Date.now() });
     if (client.control) this.sendStats(client);
     void this.announceConns();
   }

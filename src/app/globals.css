@@ -305,6 +305,18 @@ body {
   pointer-events: none;
 }
 
+/*
+ * Floor closed. The switch is a disabled <button>, so this is presentation
+ * only -- the gate itself is enforced on the server.
+ */
+.board[data-armed="false"] .switch {
+  opacity: 0.42;
+}
+
+.switch:disabled {
+  cursor: default;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .lbl,
   .track,
@@ -453,4 +465,12 @@ body {
 .btn--quiet {
   opacity: 0.65;
   font-size: 11px;
+}
+
+.ctl-gate {
+  margin-bottom: 18px;
+}
+
+.ctl-note--tight {
+  margin: 8px 2px 0;
 }

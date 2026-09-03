@@ -32,9 +32,12 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
   );
   const [ready, setReady] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [armed, setArmed] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
+  // Read inside callbacks, where the state value would be a stale closure.
+  const armedRef = useRef(false);
   const attemptRef = useRef(0);
   const retiredRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -72,9 +75,18 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
 
         switch (message.t) {
           case "hello":
+            setState(message.state);
+            setArmed(message.armed);
+            armedRef.current = message.armed;
+            setReady(true);
+            break;
           case "full":
             setState(message.state);
             setReady(true);
+            break;
+          case "armed":
+            setArmed(message.v);
+            armedRef.current = message.v;
             break;
           case "state":
             setState((prev) => ({ ...prev, [message.id]: message.v }));
@@ -111,6 +123,9 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
 
   const toggle = useCallback(
     (id: string, value: boolean): void => {
+      // The server enforces this too; this just avoids a pointless round trip
+      // and an optimistic flip the server would immediately contradict.
+      if (!armedRef.current) return;
       setState((prev) => ({ ...prev, [id]: value }));
       navigator.vibrate?.(10);
       send({ t: "toggle", id, v: value });
@@ -126,5 +141,8 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
     [send],
   );
 
-  return { state, ready, connected, stats, toggle, force };
+  /** Operator only: open or close the floor to the audience. */
+  const arm = useCallback((value: boolean): void => send({ t: "arm", v: value }), [send]);
+
+  return { state, ready, connected, armed, stats, toggle, force, arm };
 }

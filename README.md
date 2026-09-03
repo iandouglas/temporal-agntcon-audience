@@ -29,6 +29,14 @@ imported there would be a different instance from the one holding the sockets.
 
 ### Decisions worth knowing
 
+**The audience gate.** The five switches are inert until the operator opens
+the floor from `/control`. A cold start defaults to locked, so a phone that
+scans the QR code early can never drive anything before you are ready. The gate
+is enforced on the server, not just by disabling the buttons — a greyed-out
+switch stops an honest phone, but only the server stops a console. It lives in
+Redis (`switchboard:armed`), so it survives a redeploy: if the floor was open
+when a replica restarted, it comes back open.
+
 **One POST per tap, unthrottled.** The live crowd load is part of the demo, so
 taps are not coalesced. Fifty people tapping in a second is fifty calls.
 
@@ -60,7 +68,7 @@ environment rather than being baked in at build time.
 | `mcp_name` | no | Label above the top switch. Defaults to `AGENT ↔ MCP SERVER`. |
 | `service_1_url` … `service_4_url` | yes | Base URLs for the four APIs. Server-side only. |
 | `service_1_name` … `service_4_name` | no | Labels. Default to `SERVICE 1` … `SERVICE 4`. |
-| `admin_token` | yes | Gates `/control` and the reseed endpoint. Both are disabled without it. |
+| `admin_token` | yes | Gates `/control` and the admin endpoints. Both are disabled without it. |
 | `REDIS_URL` | for >1 replica | Railway's Redis plugin sets this. Without it the app uses an in-process bus: correct for one replica, but replicas will not sync. |
 | `page_title`, `page_subtitle` | no | Page copy. |
 
@@ -94,7 +102,21 @@ Railway's private DNS is IPv6-only, which the dispatcher handles via
 `/control?token=<admin_token>` shows connected clients across all replicas,
 per-service state, tap counts, and the status and latency of the last POST to
 each service. It can force any switch on or off individually or in bulk, all
-bypassing the rate cap.
+bypassing the rate cap and the audience gate.
+
+### Opening and closing the floor
+
+The **AUDIENCE CONTROLS** switch at the top of `/control` is the run of the
+demo. Everything below it works whether the floor is open or closed, so you
+never lose the ability to drive the services yourself.
+
+| | audience phones | your controls |
+| --- | --- | --- |
+| Locked (the default) | switches dimmed and disabled, footer reads *waiting for the demo to start* | fully working |
+| Open | all five switches live | fully working |
+
+Flipping it takes effect on every connected phone immediately, with no reload,
+in both directions. At the end of the demo: close the floor, then **ALL OFF**.
 
 ### Resetting between rehearsal and the keynote
 

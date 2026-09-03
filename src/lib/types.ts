@@ -34,6 +34,7 @@ export interface DispatchResult {
 /** Events replicated between replicas over the bus. */
 export type BusEvent =
   | { t: "state"; id: string; v: boolean; ts: number }
+  | { t: "armed"; v: boolean; ts: number }
   | { t: "full"; state: StateMap; ts: number }
   | { t: "dispatch"; r: DispatchResult }
   | { t: "taps"; delta: Record<string, number> }
@@ -43,12 +44,14 @@ export type BusEvent =
 export type ClientMessage =
   | { t: "toggle"; id: string; v: boolean }
   | { t: "force"; id: string; v: boolean }
+  | { t: "arm"; v: boolean }
   | { t: "ping" };
 
 /** Server -> browser. */
 export type ServerMessage =
-  | { t: "hello"; state: StateMap; ts: number }
+  | { t: "hello"; state: StateMap; armed: boolean; ts: number }
   | { t: "state"; id: string; v: boolean; ts: number }
+  | { t: "armed"; v: boolean; ts: number }
   | { t: "full"; state: StateMap; ts: number }
   | { t: "stats"; conns: number; taps: Record<string, number>; dispatch: Record<string, DispatchResult | null> }
   | { t: "pong" };

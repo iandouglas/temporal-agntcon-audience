@@ -15,6 +15,7 @@ import type { BusEvent, StateMap } from "./types";
  */
 
 const STATE_KEY = "switchboard:state";
+const ARMED_KEY = "switchboard:armed";
 const SEED_LOCK_KEY = "switchboard:seedlock";
 const CHANNEL = "switchboard:events";
 
@@ -27,6 +28,9 @@ export interface Bus {
   putState(state: StateMap): Promise<void>;
   setField(id: string, value: boolean): Promise<void>;
   clearState(): Promise<void>;
+  /** Whether the audience may drive the switches. Null means never set. */
+  getArmed(): Promise<boolean | null>;
+  setArmed(value: boolean): Promise<void>;
   acquireSeedLock(ttlSeconds: number): Promise<boolean>;
   releaseSeedLock(): Promise<void>;
   publish(event: BusEvent): Promise<void>;
@@ -50,6 +54,7 @@ class MemoryBus implements Bus {
   readonly kind = "memory" as const;
   readonly connected = true;
   private state: StateMap | null = null;
+  private armed: boolean | null = null;
   private lock = false;
   private handlers: Array<(event: BusEvent) => void> = [];
 
@@ -69,6 +74,14 @@ class MemoryBus implements Bus {
 
   async clearState(): Promise<void> {
     this.state = null;
+  }
+
+  async getArmed(): Promise<boolean | null> {
+    return this.armed;
+  }
+
+  async setArmed(value: boolean): Promise<void> {
+    this.armed = value;
   }
 
   async acquireSeedLock(): Promise<boolean> {
@@ -102,7 +115,8 @@ type RedisLike = {
   hgetall(key: string): Promise<Record<string, string>>;
   hset(key: string, hash: Record<string, string>): Promise<number>;
   del(key: string): Promise<number>;
-  set(key: string, value: string, mode: "EX", ttl: number, nx: "NX"): Promise<string | null>;
+  get(key: string): Promise<string | null>;
+  set(key: string, ...args: unknown[]): Promise<string | null>;
   publish(channel: string, message: string): Promise<number>;
   subscribe(channel: string): Promise<unknown>;
   on(event: string, listener: (...args: never[]) => void): unknown;
@@ -182,6 +196,16 @@ class RedisBus implements Bus {
 
   async clearState(): Promise<void> {
     await this.client.del(STATE_KEY);
+  }
+
+  async getArmed(): Promise<boolean | null> {
+    const raw = await this.client.get(ARMED_KEY);
+    if (raw === null || raw === undefined) return null;
+    return raw === "1";
+  }
+
+  async setArmed(value: boolean): Promise<void> {
+    await this.client.set(ARMED_KEY, value ? "1" : "0");
   }
 
   async acquireSeedLock(ttlSeconds: number): Promise<boolean> {

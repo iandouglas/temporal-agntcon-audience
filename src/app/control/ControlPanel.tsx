@@ -2,7 +2,15 @@
 
 import { useState } from "react";
 import { useSwitchboard } from "../../hooks/useSwitchboard";
+import { ToggleSwitch } from "../../components/ToggleSwitch";
 import type { DispatchResult, PublicService } from "../../lib/types";
+
+/** Not a real service -- it drives the audience gate, not an endpoint. */
+const AUDIENCE_GATE: PublicService = {
+  id: "__gate",
+  name: "AUDIENCE CONTROLS",
+  kind: "mcp",
+};
 
 interface Props {
   services: PublicService[];
@@ -17,7 +25,7 @@ function describe(result: DispatchResult | null | undefined): string {
 }
 
 export function ControlPanel({ services, token }: Props) {
-  const { state, connected, stats, force } = useSwitchboard(services, { control: true, token });
+  const { state, connected, armed, stats, force, arm } = useSwitchboard(services, { control: true, token });
   const [reseeding, setReseeding] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -57,6 +65,15 @@ export function ControlPanel({ services, token }: Props) {
         {connected ? "connected" : "reconnecting…"}
         {notice ? ` · ${notice}` : ""}
       </p>
+
+      <div className="ctl-gate">
+        <ToggleSwitch service={AUDIENCE_GATE} on={armed} onToggle={arm} />
+        <p className="ctl-note ctl-note--tight">
+          {armed
+            ? "The floor is open — all five switches are live on every phone."
+            : "The audience can see the board but cannot change anything. Blocked on the server, not just greyed out."}
+        </p>
+      </div>
 
       <div className="ctl-bulk">
         <button type="button" className="btn btn--bulk" onClick={() => setAll(true)}>
