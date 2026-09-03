@@ -47,7 +47,7 @@ export function HexField() {
                 key={`${cx}-${cy}`}
                 points={hex(cx, cy)}
                 fill="none"
-                stroke="rgba(255,255,255,0.075)"
+                stroke="rgba(255,255,255,0.09)"
                 strokeWidth="1"
               />
             ))}

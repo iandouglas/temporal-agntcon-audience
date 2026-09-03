@@ -18,8 +18,9 @@
   --label-idle: #9b9490;
   --hairline: rgba(255, 255, 255, 0.1);
 
-  --track-h: clamp(40px, 6.4dvh, 56px);
-  --track-w: clamp(100px, 34vw, 180px);
+  --track-h: clamp(40px, 6.6dvh, 62px);
+  /* Viewport-relative fallback; .card narrows this to its own width below. */
+  --track-w: clamp(110px, 34vw, 200px);
   --knob: calc(var(--track-h) - 12px);
   --card-radius: 16px;
 }
@@ -49,7 +50,7 @@ body {
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.5;
+  opacity: 0.85;
 }
 
 .vignette {
@@ -58,8 +59,8 @@ body {
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(120% 90% at 50% 0%, rgba(120, 30, 45, 0.5), transparent 60%),
-    radial-gradient(140% 100% at 50% 100%, rgba(0, 0, 0, 0.55), transparent 55%);
+    radial-gradient(120% 90% at 50% 0%, rgba(120, 30, 45, 0.42), transparent 62%),
+    radial-gradient(150% 110% at 50% 100%, rgba(0, 0, 0, 0.4), transparent 62%);
 }
 
 /* ---- layout ------------------------------------------------------------- */
@@ -150,6 +151,14 @@ body {
 /* ---- card --------------------------------------------------------------- */
 
 .card {
+  /*
+   * Sizing the track against the card rather than the viewport is what keeps the
+   * 2x2 layout honest: each card is roughly half the viewport there, and a
+   * viewport-relative track overflows it. Browsers without container query units
+   * drop this declaration and fall back to the :root value above.
+   */
+  container-type: inline-size;
+  --track-w: clamp(110px, 40cqw, 200px);
   width: 100%;
   min-height: 0;
   display: flex;
@@ -170,7 +179,7 @@ body {
 
 .card-name {
   margin: 0;
-  font-size: clamp(10px, 1.7dvh, 13px);
+  font-size: clamp(10px, 1.8dvh, 14px);
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;

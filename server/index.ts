@@ -31,8 +31,10 @@ async function main(): Promise<void> {
 
   const app = next({ dev, hostname, port });
   const handle = app.getRequestHandler();
-  const upgradeHandler = app.getUpgradeHandler();
   await app.prepare();
+  // Must come after prepare(): Next builds its upgrade handler from the
+  // prepared server instance.
+  const upgradeHandler = app.getUpgradeHandler();
 
   const server = createServer((req, res) => {
     void route(req, res, hub, handle);
