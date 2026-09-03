@@ -93,20 +93,35 @@ Railway's private DNS is IPv6-only, which the dispatcher handles via
 
 `/control?token=<admin_token>` shows connected clients across all replicas,
 per-service state, tap counts, and the status and latency of the last POST to
-each service. It can force any switch on or off (bypassing the rate cap), and
-it can reseed.
+each service. It can force any switch on or off individually or in bulk, all
+bypassing the rate cap.
 
-**Before the keynote**, once the services are in the state you want the room to
-start from, hit **RESEED FROM /HEALTH**. That clears the stored state, re-reads
-every `/health`, and broadcasts the result — which is how you get back to a
-clean baseline after a rehearsal.
+### Resetting between rehearsal and the keynote
+
+Use **ALL ON** / **ALL OFF** on `/control`, or just set the five switches by
+hand. That is the authoritative reset: forcing a switch into a position it
+already holds still fires its POST, so this drives the services to a known state
+rather than assuming they are already in one.
+
+This matters more than it sounds. If a service drifted — restarted, or was
+toggled by something other than this app — the two reset paths do opposite
+things:
+
+| | board ends up | service ends up |
+| --- | --- | --- |
+| ALL ON / ALL OFF | the position you chose | **driven to that position** |
+| Reseed from /health | matching the drifted service | unchanged |
+
+So reseed is only the right tool when you want the board to agree with services
+you are not driving. For a demo where you control everything, the bulk buttons
+are what you want, and `/control` says so next to the reseed button.
 
 ```bash
-# Same thing from a phone or laptop
-curl -XPOST -H 'authorization: Bearer <admin_token>' https://<host>/api/admin/reseed
-
 # Read current state without changing anything
 curl -H 'authorization: Bearer <admin_token>' https://<host>/api/admin/state
+
+# Reseed, if you ever do want the services to win
+curl -XPOST -H 'authorization: Bearer <admin_token>' https://<host>/api/admin/reseed
 ```
 
 If a service shows a red last-POST line on `/control`, the problem is between

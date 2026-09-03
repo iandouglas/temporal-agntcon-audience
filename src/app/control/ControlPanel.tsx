@@ -23,6 +23,15 @@ export function ControlPanel({ services, token }: Props) {
 
   const totalTaps = Object.values(stats?.taps ?? {}).reduce((sum, n) => sum + n, 0);
 
+  /**
+   * The reset: drive every service to the same position and take the board with
+   * it. Re-asserting a position a service already holds still fires its POST, so
+   * this corrects drift rather than merely agreeing with it.
+   */
+  function setAll(value: boolean): void {
+    for (const service of services) force(service.id, value);
+  }
+
   async function reseed(): Promise<void> {
     if (!window.confirm("Wipe stored state and re-read /health on every service?")) return;
     setReseeding(true);
@@ -48,6 +57,15 @@ export function ControlPanel({ services, token }: Props) {
         {connected ? "connected" : "reconnecting…"}
         {notice ? ` · ${notice}` : ""}
       </p>
+
+      <div className="ctl-bulk">
+        <button type="button" className="btn btn--bulk" onClick={() => setAll(true)}>
+          ALL ON
+        </button>
+        <button type="button" className="btn btn--bulk" onClick={() => setAll(false)}>
+          ALL OFF
+        </button>
+      </div>
 
       <div className="stat-row">
         <div className="stat">
@@ -88,7 +106,12 @@ export function ControlPanel({ services, token }: Props) {
         );
       })}
 
-      <button type="button" className="btn btn--wide" onClick={() => void reseed()} disabled={reseeding}>
+      <p className="ctl-note">
+        Reseed adopts whatever the services currently report — it makes the board
+        agree with them, it does not change them. To reset the demo, use ALL ON /
+        ALL OFF above, which drives the services instead.
+      </p>
+      <button type="button" className="btn btn--wide btn--quiet" onClick={() => void reseed()} disabled={reseeding}>
         {reseeding ? "RE-SEEDING…" : "RESEED FROM /HEALTH"}
       </button>
     </main>
