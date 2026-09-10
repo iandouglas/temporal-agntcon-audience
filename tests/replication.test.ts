@@ -149,6 +149,40 @@ describe("replication", { skip }, () => {
       );
     });
 
+    it("carries a rename to phones on the other replica", async () => {
+      // A local-only broadcast passes every single-replica test and still
+      // leaves most of the room reading the old name in production.
+      const onA = await connect(a.base, "", "breaker");
+      const onB = await connect(b.base, "", "fixer");
+      const control = await connectControl(a.base, TOKEN);
+      await sleep(500);
+
+      const nameOn = (c: Client): string | undefined => {
+        const frame = c.messages.filter((m) => m.t === "names").at(-1) as
+          | { names: Record<string, string> }
+          | undefined;
+        const seen = frame?.names ?? (hello(c) as unknown as { names?: Record<string, string> })?.names;
+        return seen?.service_2;
+      };
+
+      control.send(JSON.stringify({ t: "set-name", id: "service_2", name: "Order Horchata" }));
+
+      await waitFor("replica A relabelled", () => nameOn(onA) === "Order Horchata",
+        { detail: () => `A saw ${nameOn(onA)}` });
+      await waitFor("replica B relabelled", () => nameOn(onB) === "Order Horchata",
+        { detail: () => `B saw ${nameOn(onB)}` });
+
+      // And a phone arriving on B afterwards is told the new name too.
+      const late = await connect(b.base, "", "breaker");
+      await sleep(500);
+      assert.equal(nameOn(late), "Order Horchata", "replica B must have adopted it, not just relayed it");
+
+      onA.close();
+      onB.close();
+      late.close();
+      control.close();
+    });
+
     it("resets counters on every replica, not just the operator's", async () => {
       const controlB = await connectControl(b.base, TOKEN);
       await sleep(1200);

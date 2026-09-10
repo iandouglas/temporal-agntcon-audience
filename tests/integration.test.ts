@@ -386,9 +386,15 @@ describe("operator counters", () => {
     await waitFor(
       "reset drove it back up",
       async () => (await adminState(a.base, TOKEN)).state.service_3 === true,
-      { detail: async () => "still down" } as never,
     );
-    assert.equal(stubs.service_3.on, true, "the service itself must be up, not just the board");
+    // The board's state flips synchronously while the POST is fire-and-forget,
+    // so reality lags it by a beat. Wait for the service itself rather than
+    // assuming the two move together.
+    await waitFor(
+      "the service itself came back up, not just the board",
+      () => stubs.service_3.on === true,
+      { detail: () => `stub on=${stubs.service_3.on}` },
+    );
   });
 
   it("resets over HTTP too, for a phone with curl", async () => {
