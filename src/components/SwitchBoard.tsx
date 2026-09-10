@@ -23,6 +23,9 @@ export function SwitchBoard({ services, title, subtitle }: Props) {
         ? "live"
         : "waiting for the demo to start";
 
+  /* Drives the glow: only the pre-demo wait pulses. */
+  const statusState = !connected ? "down" : !ready ? "syncing" : armed ? "live" : "waiting";
+
   const mcp = services.filter((service) => service.kind === "mcp");
   const apis = services.filter((service) => service.kind === "api");
 
@@ -31,6 +34,9 @@ export function SwitchBoard({ services, title, subtitle }: Props) {
       <header className="head">
         <h1>{title}</h1>
         <p>{subtitle}</p>
+        <p className="status" data-state={statusState} aria-live="polite">
+          {status}
+        </p>
       </header>
 
       <section className="tier-mcp">
@@ -59,9 +65,6 @@ export function SwitchBoard({ services, title, subtitle }: Props) {
         ))}
       </section>
 
-      <p className="foot" data-warn={!connected} aria-live="polite">
-        {status}
-      </p>
     </main>
   );
 }

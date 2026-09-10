@@ -203,7 +203,7 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
       const page = await openBoard(VIEWPORTS[1]);
 
       assert.equal(await page.getAttribute(".board", "data-armed"), "false");
-      assert.equal(await page.textContent(".foot"), "waiting for the demo to start");
+      assert.equal((await page.textContent(".status"))?.trim(), "waiting for the demo to start");
       assert.ok(await page.$$eval('[role="switch"]', (els) => els.every((el) => (el as HTMLButtonElement).disabled)),
         "every switch should be a disabled button, not just dimmed");
       const opacity = await page.$eval('[role="switch"]', (el) => getComputedStyle(el).opacity);
@@ -226,7 +226,7 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
 
       await page.waitForFunction(() => document.querySelector(".board")?.getAttribute("data-armed") === "true",
         null, { timeout: 5000 });
-      assert.equal(await page.textContent(".foot"), "live");
+      assert.equal((await page.textContent(".status"))?.trim(), "live");
       assert.ok(await page.$$eval('[role="switch"]', (els) => els.every((el) => !(el as HTMLButtonElement).disabled)));
 
       const target = page.getByRole("switch", { name: "SERVICE 3" });
