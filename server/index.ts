@@ -18,7 +18,20 @@ import type { ClientMessage, Role, ServerMessage } from "../src/lib/types";
  * different instance from the one holding the sockets.
  */
 
-const dev = process.env.NODE_ENV !== "production";
+/*
+ * Production unless something explicitly asks for development.
+ *
+ * This used to read `NODE_ENV !== "production"`, which meant an unset NODE_ENV
+ * silently started the dev server. On Railway that is not a small mistake: Next
+ * compiles per request, and with several replicas each one produces different
+ * chunk hashes, so a browser served HTML by one replica 404s on chunks from
+ * another, hydration never runs, and the board sits on "reconnecting..." while
+ * the server looks perfectly healthy.
+ *
+ * The npm dev script sets NODE_ENV=development, so the safe default is the one
+ * a deployment gets by doing nothing.
+ */
+const dev = process.env.NODE_ENV === "development";
 const port = Number.parseInt(process.env.PORT ?? "3000", 10);
 
 /*

@@ -64,6 +64,34 @@ describe("boot", () => {
     assert.match(a.log(), /all 5 service URLs look well-formed/);
   });
 
+
+  it("starts in production mode when NODE_ENV is unset", async () => {
+    // An unset NODE_ENV used to start the dev server, which on a multi-replica
+    // deploy serves HTML whose chunk hashes no replica agrees on: 404s,
+    // hydration never runs, and the board sits on "reconnecting..." forever
+    // while every healthcheck passes.
+    const ports = { mcp: 4971, services: [4972, 4973, 4974, 4975] };
+    const extraStubs = [
+      await startStub(ports.mcp, "bool", true),
+      await startStub(ports.services[0], "obj", true),
+      await startStub(ports.services[1], "word", true),
+      await startStub(ports.services[2], "nested", true),
+      await startStub(ports.services[3], "bool", true),
+    ];
+    const replica = await startReplica({
+      port: 4976,
+      stubPorts: ports,
+      adminToken: TOKEN,
+      extraEnv: { NODE_ENV: "" },
+    });
+
+    assert.match(replica.log(), /\(production\)/, "an unset NODE_ENV must not start the dev server");
+    assert.ok(!/\(development\)/.test(replica.log()), replica.log().slice(0, 400));
+
+    await replica.stop();
+    for (const stub of extraStubs) await stub.close();
+  });
+
   it("still binds a reachable address when HOSTNAME is a container id", async () => {
     // Docker and Railway set HOSTNAME to the container id. An earlier version
     // used it as the bind address, which produced a 502 from a process whose
