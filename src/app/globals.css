@@ -170,11 +170,11 @@ body {
 /* Waiting for the operator: slow amber breath, to say "not yet, but soon". */
 .status[data-state="waiting"] {
   color: var(--amber-bright);
-  animation: status-breathe 3.4s ease-in-out infinite;
+  animation: status-breathe 7s ease-in-out infinite;
 }
 
 .status[data-state="waiting"]::after {
-  animation: glow-breathe 3.4s ease-in-out infinite;
+  animation: glow-breathe 7s ease-in-out infinite;
 }
 
 @keyframes status-breathe {
