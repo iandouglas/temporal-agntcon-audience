@@ -183,8 +183,11 @@ export interface Client extends WebSocket {
   messages: Array<Record<string, unknown>>;
 }
 
-export async function connect(base: string, query = ""): Promise<Client> {
-  const ws = new WebSocket(`${base.replace("http", "ws")}/ws${query}`) as Client;
+export async function connect(base: string, query = "", role?: Role): Promise<Client> {
+  // The real client gets its team from a cookie the page set; tests set the
+  // cookie directly so they can control which side a socket votes for.
+  const options = role ? { headers: { cookie: `mep_role=${role}` } } : undefined;
+  const ws = new WebSocket(`${base.replace("http", "ws")}/ws${query}`, options) as Client;
   ws.messages = [];
   ws.on("message", (data) => ws.messages.push(JSON.parse(data.toString()) as Record<string, unknown>));
   await once(ws, "open");
@@ -242,11 +245,32 @@ export function lastStats(client: Client): Stats | undefined {
   return client.messages.filter((m) => m.t === "stats").at(-1) as Stats | undefined;
 }
 
+export type Role = "breaker" | "fixer";
+
+export interface Tally {
+  breaks: number;
+  fixes: number;
+  on: boolean;
+}
+
+export interface Hello {
+  state: Record<string, boolean>;
+  tallies: Record<string, Tally>;
+  role: Role;
+  armed: boolean;
+}
+
 /** The `hello` frame a client received on connect. */
-export function hello(client: Client): { state: Record<string, boolean>; armed: boolean } | undefined {
-  return client.messages.find((m) => m.t === "hello") as
-    | { state: Record<string, boolean>; armed: boolean }
+export function hello(client: Client): Hello | undefined {
+  return client.messages.find((m) => m.t === "hello") as Hello | undefined;
+}
+
+/** Most recent tally frame a client has received. */
+export function lastTallies(client: Client): Record<string, Tally> | undefined {
+  const frame = client.messages.filter((m) => m.t === "tallies").at(-1) as
+    | { tallies: Record<string, Tally> }
     | undefined;
+  return frame?.tallies;
 }
 
 export function sawState(client: Client, id: string, value: boolean): boolean {

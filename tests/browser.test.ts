@@ -71,13 +71,17 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
     await sleep(500);
   };
 
-  const openBoard = async (viewport: { width: number; height: number; dpr: number }): Promise<Page> => {
+  const openBoard = async (
+    viewport: { width: number; height: number; dpr: number },
+    role: "breaker" | "fixer" = "breaker",
+  ): Promise<Page> => {
     const context = await browser.newContext({
       viewport: { width: viewport.width, height: viewport.height },
       deviceScaleFactor: viewport.dpr,
       isMobile: true,
       hasTouch: true,
     });
+    await context.addCookies([{ name: "mep_role", value: role, url: app.base }]);
     const page = await context.newPage();
     await page.goto(app.base, { waitUntil: "networkidle" });
     await page.waitForSelector('.board[data-ready="true"]');
@@ -92,10 +96,14 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
       it(`fits all five switches on ${viewport.name} with no scrolling`, async () => {
         const page = await openBoard(viewport);
         const report = await page.evaluate(() => {
-          const switches = [...document.querySelectorAll('[role="switch"]')];
-          const boxes = switches.map((el) => el.getBoundingClientRect());
+          const cards = [...document.querySelectorAll(".card")];
+          const boxes = cards.map((el) => el.getBoundingClientRect());
           return {
-            count: switches.length,
+            count: cards.length,
+            namesClipped: cards.filter((c) => {
+              const n = c.querySelector(".card-name");
+              return n ? n.scrollHeight > n.clientHeight + 1 : true;
+            }).length,
             allVisible: boxes.every((b) => b.top >= 0 && b.bottom <= window.innerHeight),
             lastBottom: Math.max(...boxes.map((b) => b.bottom)),
             viewportHeight: window.innerHeight,
@@ -105,7 +113,8 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
           };
         });
 
-        assert.equal(report.count, 5, "all five switches should render");
+        assert.equal(report.count, 5, "all five cards should render");
+        assert.equal(report.namesClipped, 0, "no service name may be clipped");
         assert.ok(report.allVisible, `last switch ends at ${report.lastBottom} of ${report.viewportHeight}`);
         assert.ok(report.scrollHeight <= report.viewportHeight + 1,
           `page scrolls vertically: ${report.scrollHeight} > ${report.viewportHeight}`);
@@ -117,82 +126,116 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
 
     it("puts the MCP switch above the four APIs", async () => {
       const page = await openBoard(VIEWPORTS[1]);
-      const tops = await page.$$eval('[role="switch"]', (els) =>
-        els.map((el) => ({ name: el.getAttribute("aria-label"), top: el.getBoundingClientRect().top })));
+      const tops = await page.$$eval(".card", (els) =>
+        els.map((el) => ({
+          name: el.querySelector(".card-name")?.textContent?.trim(),
+          top: el.getBoundingClientRect().top,
+        })));
+      assert.equal(tops.length, 5);
       const mcp = tops.find((t) => t.name === "AGENT MCP")!;
       assert.ok(tops.filter((t) => t !== mcp).every((t) => t.top > mcp.top),
-        "the MCP switch must sit above every API switch");
+        "the MCP card must sit above every API card");
       await page.context().close();
     });
   });
 
-  describe("the ON/OFF type treatment", () => {
+  describe("the tug of war", () => {
     before(async () => { await arm(true); });
 
-    it("renders the active side at 24pt black, outlined and glowing", async () => {
-      const page = await openBoard(VIEWPORTS[1]);
-      const labels = await page.$$eval('[role="switch"]', (els) =>
-        els.map((el) => {
-          const on = (el as HTMLElement).dataset.on === "true";
-          const active = getComputedStyle(el.querySelector(on ? ".lbl--on" : ".lbl--off")!);
-          const idle = getComputedStyle(el.querySelector(on ? ".lbl--off" : ".lbl--on")!);
-          return {
-            on,
-            activeSize: active.fontSize,
-            activeColor: active.color,
-            activeStroke: active.webkitTextStrokeWidth,
-            activeGlow: active.textShadow !== "none",
-            idleSize: idle.fontSize,
-            idleColor: idle.color,
-            idleGlow: idle.textShadow !== "none",
-            idleStroke: idle.webkitTextStrokeWidth,
-          };
+    it("gives the two teams clearly different colours", async () => {
+      const breakerPage = await openBoard(VIEWPORTS[1], "breaker");
+      const fixerPage = await openBoard(VIEWPORTS[1], "fixer");
+
+      const read = (page: Page) =>
+        page.$eval(".vote", (el) => ({
+          label: el.textContent?.trim(),
+          role: (el as HTMLElement).dataset.role,
+          background: getComputedStyle(el).backgroundImage,
         }));
 
-      assert.ok(labels.some((l) => l.on) && labels.some((l) => !l.on),
-        "need at least one ON and one OFF switch to compare");
+      const b = await read(breakerPage);
+      const f = await read(fixerPage);
+      assert.equal(b.label, "BREAK");
+      assert.equal(f.label, "FIX");
+      assert.equal(b.role, "breaker");
+      assert.equal(f.role, "fixer");
+      assert.notEqual(b.background, f.background, "the two teams must not look alike");
 
-      for (const label of labels) {
-        assert.equal(label.activeSize, "32px", "24pt active label");
-        assert.equal(label.activeColor, "rgb(0, 0, 0)", "active label is black");
-        assert.ok(parseFloat(label.activeStroke) > 0, "active label has a white outline");
-        assert.ok(label.activeGlow, "active label glows");
+      // Red for breakers, blue for fixers -- deliberately not red/green.
+      assert.match(b.background, /212, 61, 61|rgb\(212/);
+      assert.match(f.background, /61, 127, 212|rgb\(61/);
 
-        assert.equal(label.idleSize, "16px", "12pt idle label");
-        assert.notEqual(label.idleColor, "rgb(0, 0, 0)", "idle label is grey, not black");
-        assert.ok(!label.idleGlow, "idle label does not glow");
-        assert.ok(parseFloat(label.idleStroke) > 0, "idle label keeps its thin white outline");
+      assert.equal((await breakerPage.textContent(".role-badge"))?.trim(), "you are a breaker");
+      assert.equal((await fixerPage.textContent(".role-badge"))?.trim(), "you are a fixer");
+      await breakerPage.context().close();
+      await fixerPage.context().close();
+    });
+
+    it("starts every bar at a 50/50 tie", async () => {
+      const page = await openBoard(VIEWPORTS[1], "breaker");
+      const bars = await page.$$eval(".card", (cards) =>
+        cards.map((c) => ({
+          br: c.querySelector(".legend--break")?.textContent?.trim(),
+          fx: c.querySelector(".legend--fix")?.textContent?.trim(),
+          state: c.querySelector(".legend-state")?.textContent?.trim(),
+        })));
+      assert.equal(bars.length, 5);
+      for (const bar of bars) {
+        assert.equal(bar.br, "50%");
+        assert.equal(bar.fx, "50%");
+        assert.equal(bar.state, "UP");
       }
       await page.context().close();
     });
 
-    it("swaps the emphasis when a switch is toggled", async () => {
-      const page = await openBoard(VIEWPORTS[1]);
-      const target = page.getByRole("switch", { name: "SERVICE 1" });
-      const before = await target.getAttribute("data-on");
+    it("moves the bar and the spark when a vote lands, and calls the service on the flip", async () => {
+      const page = await openBoard(VIEWPORTS[1], "breaker");
+      stubs[1].hits.length = 0;
 
-      await target.tap();
-      await page.waitForFunction(
-        (was) => document.querySelector('[aria-label="SERVICE 1"]')?.getAttribute("data-on") !== was,
-        before);
-      await page.waitForTimeout(400); // let the transition settle
+      const readTaco = () =>
+        page.evaluate(() => {
+          const card = [...document.querySelectorAll(".card")].find(
+            (c) => c.querySelector(".card-name")?.textContent?.trim() === "SERVICE 1",
+          )!;
+          return {
+            br: card.querySelector(".legend--break")?.textContent?.trim(),
+            state: card.querySelector(".legend-state")?.textContent?.trim(),
+            width: (card.querySelector(".battle-side--break") as HTMLElement).style.width,
+            spark: (card.querySelector(".battle-spark") as HTMLElement).style.left,
+          };
+        });
 
-      const after = await target.evaluate((el) => ({
-        on: (el as HTMLElement).dataset.on === "true",
-        onSize: getComputedStyle(el.querySelector(".lbl--on")!).fontSize,
-        offSize: getComputedStyle(el.querySelector(".lbl--off")!).fontSize,
-      }));
-      assert.equal(after.onSize, after.on ? "32px" : "16px");
-      assert.equal(after.offSize, after.on ? "16px" : "32px");
-      await page.context().close();
-    });
+      const vote = () =>
+        page.evaluate(() => {
+          const card = [...document.querySelectorAll(".card")].find(
+            (c) => c.querySelector(".card-name")?.textContent?.trim() === "SERVICE 1",
+          )!;
+          (card.querySelector(".vote") as HTMLButtonElement).click();
+        });
 
-    it("sends a real tap through to the backend service", async () => {
-      const page = await openBoard(VIEWPORTS[1]);
-      const before = stubs[1].calls;
-      await page.getByRole("switch", { name: "SERVICE 1" }).tap();
-      await page.waitForTimeout(800);
-      assert.equal(stubs[1].calls, before + 1, "the tap should have produced exactly one POST");
+      assert.deepEqual(await readTaco(), { br: "50%", state: "UP", width: "50%", spark: "50%" });
+
+      await vote();
+      await page.waitForFunction(() => {
+        const card = [...document.querySelectorAll(".card")].find(
+          (c) => c.querySelector(".card-name")?.textContent?.trim() === "SERVICE 1",
+        );
+        return card?.querySelector(".legend-state")?.textContent?.trim() === "DOWN";
+      }, null, { timeout: 8000 });
+
+      const after = await readTaco();
+      assert.equal(after.br, "100%", "one break against zero fixes is the whole bar");
+      assert.equal(after.width, "100%");
+      assert.equal(after.spark, "100%", "the spark rides the boundary");
+      assert.equal(stubs[1].hits.length, 1, "the flip calls the service exactly once");
+      assert.deepEqual(stubs[1].hits, ["off"]);
+
+      // A second break moves nothing further and must not call again.
+      await page.waitForTimeout(300);
+      await vote();
+      await page.waitForTimeout(900);
+      assert.equal(stubs[1].hits.length, 1, "piling on must stay silent");
+
       await page.context().close();
     });
   });
@@ -204,18 +247,21 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
 
       assert.equal(await page.getAttribute(".board", "data-armed"), "false");
       assert.equal((await page.textContent(".status"))?.trim(), "waiting for the demo to start");
-      assert.ok(await page.$$eval('[role="switch"]', (els) => els.every((el) => (el as HTMLButtonElement).disabled)),
-        "every switch should be a disabled button, not just dimmed");
-      const opacity = await page.$eval('[role="switch"]', (el) => getComputedStyle(el).opacity);
+      assert.ok(await page.$$eval(".vote", (els) => els.every((el) => (el as HTMLButtonElement).disabled)),
+        "every vote button should be disabled, not just dimmed");
+      const opacity = await page.$eval(".vote", (el) => getComputedStyle(el).opacity);
       assert.ok(parseFloat(opacity) < 0.6, `switches should read as inactive, opacity was ${opacity}`);
 
-      const target = page.getByRole("switch", { name: "SERVICE 2" });
-      const before = await target.getAttribute("data-on");
       const calls = stubs[2].calls;
-      await target.click({ force: true });
-      await page.waitForTimeout(600);
-      assert.equal(await target.getAttribute("data-on"), before, "a locked switch must not move");
-      assert.equal(stubs[2].calls, calls, "a locked switch must not call out");
+      const before = await page.$$eval(".legend--break", (els) => els.map((e) => e.textContent));
+      await page.$$eval(".vote", (els) => els.forEach((el) => (el as HTMLButtonElement).click()));
+      await page.waitForTimeout(700);
+      assert.deepEqual(
+        await page.$$eval(".legend--break", (els) => els.map((e) => e.textContent)),
+        before,
+        "a locked board must not count votes",
+      );
+      assert.equal(stubs[2].calls, calls, "a locked board must not call out");
       await page.context().close();
     });
 
@@ -227,13 +273,13 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
       await page.waitForFunction(() => document.querySelector(".board")?.getAttribute("data-armed") === "true",
         null, { timeout: 5000 });
       assert.equal((await page.textContent(".status"))?.trim(), "live");
-      assert.ok(await page.$$eval('[role="switch"]', (els) => els.every((el) => !(el as HTMLButtonElement).disabled)));
+      assert.ok(await page.$$eval(".vote", (els) => els.every((el) => !(el as HTMLButtonElement).disabled)));
 
-      const target = page.getByRole("switch", { name: "SERVICE 3" });
-      const before = await target.getAttribute("data-on");
-      await target.tap();
-      await page.waitForTimeout(600);
-      assert.notEqual(await target.getAttribute("data-on"), before, "the switch should respond now");
+      // A vote now registers: the bar moves off its 50/50 tie.
+      await page.$eval(".vote", (el) => (el as HTMLButtonElement).click());
+      await page.waitForFunction(
+        () => document.querySelector(".legend--break")?.textContent?.trim() !== "50%",
+        null, { timeout: 8000 });
       await page.context().close();
     });
 
@@ -243,7 +289,7 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
       await arm(false);
       await page.waitForFunction(() => document.querySelector(".board")?.getAttribute("data-armed") === "false",
         null, { timeout: 5000 });
-      assert.ok(await page.$$eval('[role="switch"]', (els) => els.every((el) => (el as HTMLButtonElement).disabled)));
+      assert.ok(await page.$$eval(".vote", (els) => els.every((el) => (el as HTMLButtonElement).disabled)));
       await page.context().close();
     });
   });
@@ -270,13 +316,13 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
 
       await operator.getByRole("button", { name: "ALL ON" }).click();
       await phone.waitForFunction(
-        () => [...document.querySelectorAll('[role="switch"]')].every((el) => (el as HTMLElement).dataset.on === "true"),
+        () => [...document.querySelectorAll(".legend-state")].every((el) => el.textContent?.trim() === "UP"),
         null, { timeout: 6000 });
       assert.ok(stubs.every((stub) => stub.on), "every service should be on");
 
       await operator.getByRole("button", { name: "ALL OFF" }).click();
       await phone.waitForFunction(
-        () => [...document.querySelectorAll('[role="switch"]')].every((el) => (el as HTMLElement).dataset.on === "false"),
+        () => [...document.querySelectorAll(".legend-state")].every((el) => el.textContent?.trim() === "DOWN"),
         null, { timeout: 6000 });
       assert.ok(stubs.every((stub) => !stub.on), "every service should be off");
 
@@ -311,7 +357,7 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
     it("zeroes the counters on request", async () => {
       await arm(true);
       const phone = await openBoard(VIEWPORTS[1]);
-      await phone.getByRole("switch", { name: "SERVICE 4" }).tap();
+      await phone.$eval(".vote", (el) => (el as HTMLButtonElement).click());
       await phone.waitForTimeout(600);
 
       const context = await browser.newContext({ viewport: { width: 430, height: 980 } });

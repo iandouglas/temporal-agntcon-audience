@@ -2,7 +2,7 @@
 
 import { useSwitchboard } from "../hooks/useSwitchboard";
 import type { PublicService } from "../lib/types";
-import { ToggleSwitch } from "./ToggleSwitch";
+import { ServiceCard } from "./ServiceCard";
 
 interface Props {
   services: PublicService[];
@@ -11,7 +11,7 @@ interface Props {
 }
 
 export function SwitchBoard({ services, title, subtitle }: Props) {
-  const { state, ready, connected, armed, toggle } = useSwitchboard(services);
+  const { tallies, role, ready, connected, armed, vote } = useSwitchboard(services);
   const live = ready && connected;
   const interactive = live && armed;
 
@@ -30,23 +30,27 @@ export function SwitchBoard({ services, title, subtitle }: Props) {
   const apis = services.filter((service) => service.kind === "api");
 
   return (
-    <main className="board" data-ready={live} data-armed={armed}>
+    <main className="board" data-ready={live} data-armed={armed} data-role={role}>
       <header className="head">
         <h1>{title}</h1>
         <p>{subtitle}</p>
         <p className="status" data-state={statusState} aria-live="polite">
           {status}
         </p>
+        <p className="role-badge" data-role={role}>
+          you are a {role}
+        </p>
       </header>
 
       <section className="tier-mcp">
         {mcp.map((service) => (
-          <ToggleSwitch
+          <ServiceCard
             key={service.id}
             service={service}
-            on={state[service.id] ?? false}
+            tally={tallies[service.id] ?? { breaks: 0, fixes: 0, on: true }}
+            role={role}
             disabled={!interactive}
-            onToggle={(value) => toggle(service.id, value)}
+            onVote={() => vote(service.id)}
           />
         ))}
       </section>
@@ -55,12 +59,13 @@ export function SwitchBoard({ services, title, subtitle }: Props) {
 
       <section className="grid">
         {apis.map((service) => (
-          <ToggleSwitch
+          <ServiceCard
             key={service.id}
             service={service}
-            on={state[service.id] ?? false}
+            tally={tallies[service.id] ?? { breaks: 0, fixes: 0, on: true }}
+            role={role}
             disabled={!interactive}
-            onToggle={(value) => toggle(service.id, value)}
+            onVote={() => vote(service.id)}
           />
         ))}
       </section>

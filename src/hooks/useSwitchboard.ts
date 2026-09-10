@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BusStatus, DispatchResult, PublicService, ServerMessage, StateMap } from "../lib/types";
+import type { BusStatus, DispatchResult, PublicService, Role, ServerMessage, StateMap, TallyMap } from "../lib/types";
 
 export interface Stats {
   conns: number;
@@ -34,6 +34,10 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
   const [ready, setReady] = useState(false);
   const [connected, setConnected] = useState(false);
   const [armed, setArmed] = useState(false);
+  const [role, setRole] = useState<Role>("breaker");
+  const [tallies, setTallies] = useState<TallyMap>(() =>
+    Object.fromEntries(services.map((s) => [s.id, { breaks: 0, fixes: 0, on: true }])),
+  );
   const [stats, setStats] = useState<Stats | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
@@ -77,9 +81,14 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
         switch (message.t) {
           case "hello":
             setState(message.state);
+            setTallies(message.tallies);
+            setRole(message.role);
             setArmed(message.armed);
             armedRef.current = message.armed;
             setReady(true);
+            break;
+          case "tallies":
+            setTallies(message.tallies);
             break;
           case "full":
             setState(message.state);
@@ -127,6 +136,20 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
   }, []);
 
+  /**
+   * Cast this viewer's vote. The bar moves when the server's next tally frame
+   * lands rather than optimistically -- the whole room's votes decide it, so a
+   * local guess would be wrong more often than right.
+   */
+  const vote = useCallback(
+    (id: string): void => {
+      if (!armedRef.current) return;
+      navigator.vibrate?.(10);
+      send({ t: "vote", id });
+    },
+    [send],
+  );
+
   const toggle = useCallback(
     (id: string, value: boolean): void => {
       // The server enforces this too; this just avoids a pointless round trip
@@ -153,5 +176,5 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
   /** Operator only: zero the tap counts and last-call history everywhere. */
   const resetCounters = useCallback((): void => send({ t: "reset-counters" }), [send]);
 
-  return { state, ready, connected, armed, stats, toggle, force, arm, resetCounters };
+  return { state, tallies, role, ready, connected, armed, stats, vote, toggle, force, arm, resetCounters };
 }
