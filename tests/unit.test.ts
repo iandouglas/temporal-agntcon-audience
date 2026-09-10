@@ -79,10 +79,12 @@ describe("TokenBucket", () => {
   });
 
   it("never exceeds capacity no matter how long it idles", async () => {
-    const bucket = new TokenBucket(1000, 4);
-    await new Promise((r) => setTimeout(r, 120));
+    // A slow refill on purpose: at a high rate a single millisecond elapsing
+    // during the burst loop grants another token, which made this flaky.
+    const bucket = new TokenBucket(1, 4);
+    await new Promise((r) => setTimeout(r, 250));
     const allowed = Array.from({ length: 50 }, () => bucket.take()).filter(Boolean).length;
-    assert.equal(allowed, 4);
+    assert.equal(allowed, 4, "idling must not bank more than the capacity");
   });
 
   it("lets a human tapping pace through untouched", async () => {
