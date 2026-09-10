@@ -355,14 +355,16 @@ export class Hub {
     const trimmed = name.trim();
     if (!service || trimmed === "" || trimmed.length > 40) return false;
     this.names[id] = trimmed;
-    try {
-      await this.bus.setName(id, trimmed);
-    } catch (err) {
-      // A rename that only reaches the live clients is still better than none;
-      // it just will not survive a restart.
-      console.error(`[names] could not persist ${id}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    this.broadcast({ t: "names", names: this.getNames(), ts: Date.now() });
+
+    /*
+     * Replicate rather than broadcast locally. A rename that only reaches the
+     * replica which handled the request leaves every phone on the other
+     * replicas showing the old name until they restart -- which is exactly what
+     * happened the first time this shipped.
+     */
+    await this.replicate({ t: "names", names: this.getNames(), ts: Date.now() }, () =>
+      this.bus.setName(id, trimmed),
+    );
     return true;
   }
 
@@ -507,6 +509,10 @@ export class Hub {
             this.taps[id] = (this.taps[id] ?? 0) + delta;
           }
         }
+        break;
+      case "names":
+        this.names = { ...event.names };
+        this.broadcast({ t: "names", names: this.getNames(), ts: event.ts });
         break;
       case "reset-counters":
         this.countersResetAt = Math.max(this.countersResetAt, event.ts);

@@ -59,6 +59,7 @@ export type BusEvent =
   | { t: "taps"; delta: Record<string, number>; ts: number }
   | { t: "votes"; delta: Record<string, { breaks: number; fixes: number }>; ts: number }
   | { t: "reset-counters"; ts: number }
+  | { t: "names"; names: Record<string, string>; ts: number }
   | { t: "conns"; replica: string; n: number; ts: number };
 
 /** Health of the shared bus, surfaced to the operator. */
