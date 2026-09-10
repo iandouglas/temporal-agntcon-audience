@@ -78,6 +78,7 @@ environment rather than being baked in at build time.
 | `admin_token` | yes | Gates `/control` and the admin endpoints. Both are disabled without it. |
 | `REDIS_URL` | for >1 replica | Railway's Redis plugin sets this. Without it the app uses an in-process bus: correct for one replica, but replicas will not sync. |
 | `page_title`, `page_subtitle` | no | Page copy. |
+| `BIND_HOST` | no | Listen address. Defaults to `::` (dual-stack, accepts IPv4 too). Do not set this to `$HOSTNAME` — Docker and Railway set that to the container id, and binding to it makes the platform proxy unable to reach the process. |
 
 Names are read case-insensitively, so `SERVICE_1_URL` works too. Base URLs are
 stored with any trailing slash stripped; the app appends `/on`, `/off` and
@@ -185,6 +186,7 @@ app uses an in-process bus and logs a warning.
 
 ```bash
 npm run typecheck       # app, server and test tsconfigs
+npm run typecheck:ui    # the browser suite (needs playwright installed)
 ```
 
 ## Tests

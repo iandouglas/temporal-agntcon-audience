@@ -5,5 +5,7 @@
     "types": ["node"]
   },
   "include": ["tests/**/*.ts", "src/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  // browser.test.ts needs playwright, which is deliberately not a dependency.
+  // Check it with tsconfig.browser.json once playwright is installed.
+  "exclude": ["node_modules", "dist", "tests/browser.test.ts"]
 }

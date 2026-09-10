@@ -15,7 +15,8 @@
     "pretest": "npm run build",
     "test": "node --import tsx --test tests/unit.test.ts tests/integration.test.ts tests/replication.test.ts",
     "test:unit": "node --import tsx --test tests/unit.test.ts",
-    "test:ui": "npm run build && node --import tsx --test tests/browser.test.ts"
+    "test:ui": "npm run build && node --import tsx --test tests/browser.test.ts",
+    "typecheck:ui": "tsc -p tsconfig.browser.json"
   },
   "dependencies": {
     "ioredis": "^5.4.2",

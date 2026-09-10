@@ -64,6 +64,33 @@ describe("boot", () => {
     assert.match(a.log(), /all 5 service URLs look well-formed/);
   });
 
+  it("still binds a reachable address when HOSTNAME is a container id", async () => {
+    // Docker and Railway set HOSTNAME to the container id. An earlier version
+    // used it as the bind address, which produced a 502 from a process whose
+    // logs said "listening" -- the platform proxy could not reach it.
+    const ports = { mcp: 4941, services: [4942, 4943, 4944, 4945] };
+    const extraStubs = [
+      await startStub(ports.mcp, "bool", true),
+      await startStub(ports.services[0], "obj", false),
+      await startStub(ports.services[1], "word", true),
+      await startStub(ports.services[2], "nested", false),
+      await startStub(ports.services[3], "bool", false),
+    ];
+    const replica = await startReplica({
+      port: 4946,
+      stubPorts: ports,
+      adminToken: TOKEN,
+      extraEnv: { HOSTNAME: "8f5959c7f7ba" },
+    });
+
+    const body = (await (await fetch(`${replica.base}/healthz`)).json()) as { ok: boolean };
+    assert.equal(body.ok, true, "the server must be reachable regardless of HOSTNAME");
+    assert.ok(!replica.log().includes("8f5959c7f7ba"), "must not bind to the container id");
+
+    await replica.stop();
+    for (const stub of extraStubs) await stub.close();
+  });
+
   it("serves a health endpoint for the platform", async () => {
     const body = (await (await fetch(`${a.base}/healthz`)).json()) as { ok: boolean; bus: { kind: string } };
     assert.equal(body.ok, true);

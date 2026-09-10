@@ -20,7 +20,17 @@ import type { ClientMessage, ServerMessage } from "../src/lib/types";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = Number.parseInt(process.env.PORT ?? "3000", 10);
-const hostname = process.env.HOSTNAME ?? "0.0.0.0";
+
+/*
+ * Bind every interface, dual-stack ("::" accepts IPv4 too unless ipv6Only is
+ * set). Railway's private network is IPv6 and its proxy reaches the container
+ * from outside, so anything narrower is unreachable one way or the other.
+ *
+ * Never read HOSTNAME here. Docker -- and therefore Railway -- sets it to the
+ * container id, and binding to that produced a 502 from a process whose logs
+ * said "listening" and looked entirely healthy.
+ */
+const bindHost = process.env.BIND_HOST ?? "::";
 
 const MAX_MESSAGE_BYTES = 1024;
 const PING_INTERVAL_MS = 25_000;
@@ -29,7 +39,7 @@ async function main(): Promise<void> {
   const hub = new Hub();
   await hub.start();
 
-  const app = next({ dev, hostname, port });
+  const app = next({ dev, port });
   const handle = app.getRequestHandler();
   await app.prepare();
   // Must come after prepare(): Next builds its upgrade handler from the
@@ -60,8 +70,8 @@ async function main(): Promise<void> {
     void upgradeHandler(req, socket, head);
   });
 
-  server.listen(port, hostname, () => {
-    console.log(`[server] listening on http://${hostname}:${port} (${dev ? "development" : "production"})`);
+  server.listen(port, bindHost, () => {
+    console.log(`[server] listening on [${bindHost}]:${port} (${dev ? "development" : "production"})`);
     console.log(`[server] replica ${hub.replicaId}, ${hub.services.length} toggles: ${hub.services.map((s) => s.id).join(", ")}`);
     if (!adminToken()) {
       console.warn("[server] admin_token is not set -- /control and the reseed endpoint are disabled.");
