@@ -11,7 +11,7 @@ interface Props {
 }
 
 export function SwitchBoard({ services, title, subtitle }: Props) {
-  const { tallies, role, ready, connected, armed, vote } = useSwitchboard(services);
+  const { tallies, names, role, ready, connected, armed, vote } = useSwitchboard(services);
   const live = ready && connected;
   const interactive = live && armed;
 
@@ -46,7 +46,7 @@ export function SwitchBoard({ services, title, subtitle }: Props) {
         {mcp.map((service) => (
           <ServiceCard
             key={service.id}
-            service={service}
+            service={{ ...service, name: names[service.id] ?? service.name }}
             tally={tallies[service.id] ?? { breaks: 0, fixes: 0, on: true }}
             role={role}
             disabled={!interactive}
@@ -61,7 +61,7 @@ export function SwitchBoard({ services, title, subtitle }: Props) {
         {apis.map((service) => (
           <ServiceCard
             key={service.id}
-            service={service}
+            service={{ ...service, name: names[service.id] ?? service.name }}
             tally={tallies[service.id] ?? { breaks: 0, fixes: 0, on: true }}
             role={role}
             disabled={!interactive}

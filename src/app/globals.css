@@ -769,3 +769,40 @@ body {
     transition-duration: 1ms;
   }
 }
+
+
+/* ---- rename field on the operator page ---------------------------------- */
+
+.ctl-rename {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--cream);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Looks like a label until you touch it, so the panel stays readable. */
+.ctl-rename:hover {
+  border-color: var(--hairline);
+}
+
+.ctl-rename:focus {
+  outline: none;
+  border-color: var(--amber);
+  background: rgba(0, 0, 0, 0.3);
+  text-transform: none;
+}
+
+.ctl-tag {
+  margin-left: 6px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--amber-bright);
+  opacity: 0.8;
+}

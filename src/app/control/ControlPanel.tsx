@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSwitchboard } from "../../hooks/useSwitchboard";
 import { ToggleSwitch } from "../../components/ToggleSwitch";
 import type { DispatchResult, PublicService } from "../../lib/types";
@@ -25,10 +25,29 @@ function describe(result: DispatchResult | null | undefined): string {
 }
 
 export function ControlPanel({ services, token }: Props) {
-  const { state, connected, armed, stats, force, arm, resetCounters } = useSwitchboard(services, {
-    control: true,
-    token,
-  });
+  const { state, names, connected, armed, stats, force, arm, resetCounters, setName } = useSwitchboard(
+    services,
+    { control: true, token },
+  );
+
+  // Local edit buffer, so typing is not fought by incoming name broadcasts.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [editing, setEditing] = useState<string | null>(null);
+  useEffect(() => {
+    setDrafts((prev) => {
+      const next = { ...prev };
+      for (const [id, name] of Object.entries(names)) {
+        if (id !== editing && next[id] !== name) next[id] = name;
+      }
+      return next;
+    });
+  }, [names, editing]);
+
+  function commitName(id: string): void {
+    const value = (drafts[id] ?? "").trim();
+    setEditing(null);
+    if (value && value !== names[id]) setName(id, value);
+  }
   const [reseeding, setReseeding] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -124,8 +143,24 @@ export function ControlPanel({ services, token }: Props) {
         return (
           <div className="ctl-service" key={service.id}>
             <div className="ctl-name">
-              {service.name}
-              {service.kind === "mcp" ? " ·  mcp" : ""}
+              <input
+                className="ctl-rename"
+                value={drafts[service.id] ?? names[service.id] ?? service.name}
+                aria-label={`Rename ${names[service.id] ?? service.name}`}
+                maxLength={40}
+                onFocus={() => setEditing(service.id)}
+                onChange={(e) => setDrafts((d) => ({ ...d, [service.id]: e.target.value }))}
+                onBlur={() => commitName(service.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                  if (e.key === "Escape") {
+                    setDrafts((d) => ({ ...d, [service.id]: names[service.id] ?? service.name }));
+                    setEditing(null);
+                    e.currentTarget.blur();
+                  }
+                }}
+              />
+              {service.kind === "mcp" ? <span className="ctl-tag">mcp</span> : null}
             </div>
             <div className="ctl-buttons">
               <button type="button" className="btn" data-active={!on} onClick={() => force(service.id, false)}>

@@ -559,3 +559,100 @@ describe("the break/fix tug of war", () => {
     );
   });
 });
+
+describe("renaming a service without a redeploy", () => {
+  let control: Client;
+  let phone: Client;
+
+  const lastNames = (c: Client): Record<string, string> | undefined => {
+    const frame = c.messages.filter((m) => m.t === "names").at(-1) as
+      | { names: Record<string, string> }
+      | undefined;
+    return frame?.names ?? (hello(c) as unknown as { names?: Record<string, string> })?.names;
+  };
+
+  before(async () => {
+    control = await connectControl(a.base, TOKEN);
+    phone = await connect(a.base, "", "breaker");
+    await sleep(400);
+  });
+
+  after(() => {
+    control.close();
+    phone.close();
+  });
+
+  it("hands the current names out on connect", () => {
+    const names = lastNames(phone)!;
+    assert.equal(names.service_1, "SERVICE 1");
+    assert.equal(names.mcp, "AGENT MCP");
+  });
+
+  it("pushes a rename to every connected phone with no reload", async () => {
+    phone.messages.length = 0;
+    control.send(JSON.stringify({ t: "set-name", id: "service_1", name: "Order Churro" }));
+    await waitFor(
+      "phone saw the new name",
+      () => lastNames(phone)?.service_1 === "Order Churro",
+      { detail: () => JSON.stringify(lastNames(phone)) },
+    );
+  });
+
+  it("serves the new name to a phone that connects afterwards", async () => {
+    const late = await connect(a.base, "", "fixer");
+    await sleep(400);
+    assert.equal(lastNames(late)?.service_1, "Order Churro");
+    late.close();
+  });
+
+  it("reports it on the admin endpoint too", async () => {
+    const body = (await (
+      await fetch(`${a.base}/api/admin/state`, { headers: { authorization: `Bearer ${TOKEN}` } })
+    ).json()) as { names: Record<string, string> };
+    assert.equal(body.names.service_1, "Order Churro");
+  });
+
+  it("renames over HTTP as well", async () => {
+    const res = await fetch(
+      `${a.base}/api/admin/name?id=service_2&name=${encodeURIComponent("Order Horchata")}`,
+      { method: "POST", headers: { authorization: `Bearer ${TOKEN}` } },
+    );
+    assert.equal(res.status, 200);
+    await waitFor("broadcast reached the phone", () => lastNames(phone)?.service_2 === "Order Horchata");
+  });
+
+  it("refuses an empty name, an over-long one, and an unknown id", async () => {
+    const bad = async (query: string): Promise<number> =>
+      (await fetch(`${a.base}/api/admin/name?${query}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      })).status;
+
+    assert.equal(await bad("id=service_1&name=%20%20"), 400);
+    assert.equal(await bad(`id=service_1&name=${"x".repeat(41)}`), 400);
+    assert.equal(await bad("id=nope&name=Whatever"), 400);
+    assert.equal(lastNames(phone)?.service_1, "Order Churro", "a rejected rename must change nothing");
+  });
+
+  it("will not let an audience socket rename anything", async () => {
+    phone.send(JSON.stringify({ t: "set-name", id: "service_1", name: "Hacked" }));
+    await sleep(600);
+    assert.equal(lastNames(phone)?.service_1, "Order Churro");
+  });
+
+  it("keeps the rename across a restart, and does not let the env var win it back", async (t) => {
+    if (!redis) {
+      t.skip("needs redis: the in-process bus cannot outlive the process");
+      return;
+    }
+    await a.stop();
+    a = await startReplica({ port: PORT_A, redisUrl: redis.url, stubPorts: STUB_PORTS, adminToken: TOKEN });
+
+    const after = await connect(a.base, "", "breaker");
+    await sleep(500);
+    const names = lastNames(after)!;
+    assert.equal(names.service_1, "Order Churro", "Redis must win over service_1_name");
+    assert.equal(names.service_3, "SERVICE 3", "a name never set still comes from the env var");
+    after.close();
+  });
+});
