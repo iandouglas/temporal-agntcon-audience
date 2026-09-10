@@ -8,6 +8,9 @@ import type {
   BusEvent,
   BusStatus,
   DispatchResult,
+  Role,
+  Tally,
+  TallyMap,
   ServerMessage,
   ServiceConfig,
   StateMap,
@@ -25,6 +28,8 @@ const CONN_HEARTBEAT_MS = 3000;
 export interface Client {
   /** True for the token-gated /control page, which receives stats as well as state. */
   control: boolean;
+  /** Which team this viewer votes for. Operators get a role too; they never vote. */
+  role: Role;
   bucket: TokenBucket;
   send(message: ServerMessage): void;
   close(): void;
@@ -63,6 +68,15 @@ export class Hub {
   private busFailures = 0;
   private lastBusError: string | null = null;
   private clients = new Set<Client>();
+
+  /**
+   * Vote tallies per service. Memory is the source of truth -- this runs as a
+   * single replica -- and Redis is a write-behind copy so a restart recovers.
+   */
+  private tallies: TallyMap = {};
+  private pendingVotes: Record<string, { breaks: number; fixes: number }> = {};
+  /** Round-robin cursor, so the teams stay balanced instead of randomly lopsided. */
+  private roleCursor = 0;
   private timers: NodeJS.Timeout[] = [];
 
   private byId(id: string): ServiceConfig | undefined {
@@ -134,6 +148,7 @@ export class Hub {
       this.state[service.id] = false;
       this.taps[service.id] = 0;
       this.lastDispatch[service.id] = null;
+      this.tallies[service.id] = { breaks: 0, fixes: 0, on: true };
     }
 
     const problems = validateServices(this.services);
@@ -150,6 +165,9 @@ export class Hub {
     this.timers.push(setInterval(() => void this.flushTaps(), TAP_FLUSH_MS));
     this.timers.push(setInterval(() => void this.announceConns(), CONN_HEARTBEAT_MS));
     this.timers.push(setInterval(() => this.broadcastStats(), 1000));
+    // 10Hz is smoother than the eye needs and costs each phone ~10 frames a
+    // second instead of one per vote from the whole room.
+    this.timers.push(setInterval(() => this.broadcastTallies(), 100));
   }
 
   /**
@@ -238,12 +256,32 @@ export class Hub {
     console.log("[counters] reset");
   }
 
+  /**
+   * Back to a clean 0-0 on every service, which is a tie, which means up.
+   *
+   * The tally is the board's source of truth, so a reset cannot leave a bar
+   * showing 50% while the service behind it is still down -- anything that is
+   * down gets driven back up. This is also what un-sticks a bar that has gone
+   * rigid after thousands of votes.
+   */
   private applyCounterReset(): void {
     this.pendingTaps = {};
+    this.pendingVotes = {};
     for (const service of this.services) {
       this.taps[service.id] = 0;
       this.lastDispatch[service.id] = null;
+      this.tallies[service.id] = { breaks: 0, fixes: 0, on: true };
+
+      if (this.state[service.id] !== true) {
+        this.state[service.id] = true;
+        void this.fireAndRecord(service, true);
+        this.broadcast({ t: "state", id: service.id, v: true, ts: Date.now() });
+        void this.replicate({ t: "state", id: service.id, v: true, ts: Date.now() }, () =>
+          this.bus.setField(service.id, true),
+        );
+      }
     }
+    this.broadcast({ t: "tallies", tallies: this.getTallies(), ts: Date.now() });
   }
 
   /** Wipe the stored state and re-seed from /health. Used by the operator reseed. */
@@ -259,10 +297,92 @@ export class Hub {
     return { ...this.state };
   }
 
+  /** Align the opening tallies with whatever state we seeded from. */
+  private syncTalliesToState(): void {
+    for (const service of this.services) {
+      const on = this.state[service.id] ?? true;
+      const t = this.tallies[service.id] ?? { breaks: 0, fixes: 0, on };
+      if (Hub.isOn(t) !== on) {
+        // One phantom vote so the derived state matches reality at t=0.
+        if (on) t.fixes = t.breaks;
+        else t.breaks = t.fixes + 1;
+      }
+      t.on = on;
+      this.tallies[service.id] = t;
+    }
+  }
+
   private mergeState(incoming: StateMap): void {
     for (const service of this.services) {
       this.state[service.id] = incoming[service.id] ?? this.state[service.id] ?? false;
     }
+  }
+
+  /** A 0-0 tie counts as fixers holding half the vote, so services start up. */
+  private static isOn(t: { breaks: number; fixes: number }): boolean {
+    return t.fixes >= t.breaks;
+  }
+
+  getTallies(): TallyMap {
+    const out: TallyMap = {};
+    for (const service of this.services) {
+      const t = this.tallies[service.id] ?? { breaks: 0, fixes: 0, on: true };
+      out[service.id] = { breaks: t.breaks, fixes: t.fixes, on: t.on };
+    }
+    return out;
+  }
+
+  /** Hands out breaker/fixer alternately. Callers persist it in a cookie. */
+  nextRole(): Role {
+    const role: Role = this.roleCursor % 2 === 0 ? "breaker" : "fixer";
+    this.roleCursor += 1;
+    return role;
+  }
+
+  /**
+   * One audience vote.
+   *
+   * The tally always moves. The outbound POST fires only when the derived state
+   * actually flips, which is what keeps a room full of tapping thumbs from
+   * turning into hundreds of calls a second.
+   */
+  async vote(id: string, role: Role, options: { bucket?: TokenBucket } = {}): Promise<void> {
+    const service = this.byId(id);
+    if (!service) return;
+    if (!this.armed) return;
+    if (options.bucket && !options.bucket.take()) return;
+
+    const current = this.tallies[id] ?? { breaks: 0, fixes: 0, on: true };
+    const next: Tally = {
+      breaks: current.breaks + (role === "breaker" ? 1 : 0),
+      fixes: current.fixes + (role === "fixer" ? 1 : 0),
+      on: true,
+    };
+    next.on = Hub.isOn(next);
+    this.tallies[id] = next;
+
+    const bucket = (this.pendingVotes[id] ??= { breaks: 0, fixes: 0 });
+    if (role === "breaker") bucket.breaks += 1;
+    else bucket.fixes += 1;
+
+    this.pendingTaps[id] = (this.pendingTaps[id] ?? 0) + 1;
+
+    if (next.on !== current.on) {
+      // The vote crossed the line. This is the only path that calls a service.
+      this.state[id] = next.on;
+      void this.fireAndRecord(service, next.on);
+      this.broadcast({ t: "state", id, v: next.on, ts: Date.now() });
+      await this.replicate({ t: "state", id, v: next.on, ts: Date.now() }, () =>
+        this.bus.setField(id, next.on),
+      );
+    }
+  }
+
+  /** Throttled tally frame. One snapshot beats hundreds of deltas. */
+  private broadcastTallies(): void {
+    if (Object.keys(this.pendingVotes).length === 0) return;
+    this.pendingVotes = {};
+    this.broadcast({ t: "tallies", tallies: this.getTallies(), ts: Date.now() });
   }
 
   getState(): StateMap {
@@ -293,6 +413,22 @@ export class Hub {
     }
 
     this.state[id] = value;
+
+    /*
+     * An operator force has to move the bar too, or the board shows UP while
+     * the service is down. Nudge the tally to the smallest arrangement that
+     * derives the forced value, which keeps the vote totals meaningful instead
+     * of wiping them: a tie reads as up, one break ahead reads as down.
+     */
+    if (options.operator) {
+      const t = this.tallies[id] ?? { breaks: 0, fixes: 0, on: value };
+      if (value) t.fixes = Math.max(t.fixes, t.breaks);
+      else t.breaks = Math.max(t.breaks, t.fixes + 1);
+      t.on = value;
+      this.tallies[id] = t;
+      this.broadcast({ t: "tallies", tallies: this.getTallies(), ts: Date.now() });
+    }
+
     await this.replicate({ t: "state", id, v: value, ts: Date.now() }, () =>
       this.bus.setField(id, value),
     );
@@ -369,7 +505,14 @@ export class Hub {
 
   addClient(client: Client): void {
     this.clients.add(client);
-    client.send({ t: "hello", state: this.getState(), armed: this.armed, ts: Date.now() });
+    client.send({
+      t: "hello",
+      state: this.getState(),
+      tallies: this.getTallies(),
+      role: client.role,
+      armed: this.armed,
+      ts: Date.now(),
+    });
     if (client.control) this.sendStats(client);
     void this.announceConns();
   }

@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import {
-  adminState, connect, connectControl, hello, lastStats, sawArmed, sawState,
+  adminState, connect, connectControl, hello, lastStats, lastTallies, sawArmed, sawState,
   sleep, startReplica, startRedis, startStub, waitFor,
   type Client, type Replica, type RedisHandle, type Stub,
 } from "./helpers";
@@ -293,9 +293,16 @@ describe("operator counters", () => {
     audience = await connect(a.base);
     await sleep(300);
 
-    // Start from zero. Earlier suites leave taps and last-call entries behind,
-    // and asserting against those would let a test pass on a stale value while
-    // its own POST is still in flight.
+    // Bring everything up first: a reset drives any down service back up, and
+    // that POST would repopulate the very last-call lines this suite checks.
+    for (const id of ["mcp", "service_1", "service_2", "service_3", "service_4"]) {
+      control.send(JSON.stringify({ t: "force", id, v: true }));
+    }
+    await sleep(1200);
+
+    // Then start from zero. Earlier suites leave taps and last-call entries
+    // behind, and asserting against those would let a test pass on a stale
+    // value while its own POST is still in flight.
     control.send(JSON.stringify({ t: "reset-counters" }));
     await waitFor(
       "counters clean before this suite",
@@ -341,11 +348,19 @@ describe("operator counters", () => {
     );
   });
 
-  it("leaves the switch positions alone when resetting counters", async () => {
-    const before = (await adminState(a.base, TOKEN)).state;
+  it("brings a downed service back up when resetting", async () => {
+    // The tally is the board's truth, so a reset to 0-0 -- a tie, which reads
+    // as up -- must not leave a service sitting down behind a 50% bar.
+    control.send(JSON.stringify({ t: "force", id: "service_3", v: false }));
+    await waitFor("service_3 down", async () => (await adminState(a.base, TOKEN)).state.service_3 === false);
+
     control.send(JSON.stringify({ t: "reset-counters" }));
-    await sleep(500);
-    assert.deepEqual((await adminState(a.base, TOKEN)).state, before);
+    await waitFor(
+      "reset drove it back up",
+      async () => (await adminState(a.base, TOKEN)).state.service_3 === true,
+      { detail: async () => "still down" } as never,
+    );
+    assert.equal(stubs.service_3.on, true, "the service itself must be up, not just the board");
   });
 
   it("resets over HTTP too, for a phone with curl", async () => {
@@ -402,5 +417,117 @@ describe("reseed", () => {
     assert.equal(body.state.service_3, true);
     assert.equal(stubs.service_1.calls, callsBefore, "reseed must not drive the services");
     control.close();
+  });
+});
+
+describe("the break/fix tug of war", () => {
+  let breaker: Client;
+  let fixer: Client;
+  let control: Client;
+
+  before(async () => {
+    control = await connectControl(a.base, TOKEN);
+    await sleep(200);
+    control.send(JSON.stringify({ t: "arm", v: true }));
+    await sleep(300);
+    control.send(JSON.stringify({ t: "reset-counters" }));
+    await sleep(600);
+    breaker = await connect(a.base, "", "breaker");
+    fixer = await connect(a.base, "", "fixer");
+    await sleep(400);
+  });
+
+  after(() => {
+    breaker.close();
+    fixer.close();
+    control.close();
+  });
+
+  it("tells each socket which team it is on", () => {
+    assert.equal(hello(breaker)?.role, "breaker");
+    assert.equal(hello(fixer)?.role, "fixer");
+  });
+
+  it("starts every service tied at 0-0 and therefore up", async () => {
+    // The before hook reset, so every bar is a clean tie and every service up.
+    await waitFor(
+      "all five tied and up",
+      () => {
+        const t = lastTallies(breaker) ?? hello(breaker)?.tallies;
+        if (!t) return false;
+        return ["mcp", "service_1", "service_2", "service_3", "service_4"].every(
+          (id) => t[id] && t[id].breaks === 0 && t[id].fixes === 0 && t[id].on === true,
+        );
+      },
+      { detail: () => JSON.stringify(lastTallies(breaker) ?? hello(breaker)?.tallies) },
+    );
+  });
+
+  it("moves the bar on every vote but only calls the service on a flip", async () => {
+    stubs.service_4.hits.length = 0;
+
+    // One break puts the fixers below half, so the service goes down: one POST.
+    breaker.send(JSON.stringify({ t: "vote", id: "service_4" }));
+    await waitFor("service went down", () => stubs.service_4.hits.length === 1);
+    assert.deepEqual(stubs.service_4.hits, ["off"]);
+
+    // Nine more breaks pile on. The tally climbs, the service is already down,
+    // so nothing is called. This is the whole point of the design.
+    for (let i = 0; i < 9; i += 1) {
+      breaker.send(JSON.stringify({ t: "vote", id: "service_4" }));
+      await sleep(230);
+    }
+    await waitFor(
+      "ten breaks counted",
+      () => (lastTallies(breaker)?.service_4?.breaks ?? 0) >= 10,
+      { detail: () => JSON.stringify(lastTallies(breaker)?.service_4) },
+    );
+    assert.equal(stubs.service_4.hits.length, 1, "piling on must not call the service again");
+
+    // Fixers claw back to a tie. fixes >= breaks flips it up: exactly one more POST.
+    for (let i = 0; i < 10; i += 1) {
+      fixer.send(JSON.stringify({ t: "vote", id: "service_4" }));
+      await sleep(230);
+    }
+    await waitFor("service came back up", () => stubs.service_4.hits.length === 2);
+    assert.deepEqual(stubs.service_4.hits, ["off", "on"]);
+
+    const tally = lastTallies(fixer)!.service_4;
+    assert.equal(tally.breaks, 10);
+    assert.equal(tally.fixes, 10);
+    assert.equal(tally.on, true, "a tie counts as the fixers holding half");
+  });
+
+  it("refuses votes while the floor is locked", async () => {
+    control.send(JSON.stringify({ t: "arm", v: false }));
+    await sleep(500);
+    stubs.service_3.hits.length = 0;
+    const before = lastTallies(breaker)?.service_3?.breaks ?? 0;
+    for (let i = 0; i < 5; i += 1) breaker.send(JSON.stringify({ t: "vote", id: "service_3" }));
+    await sleep(700);
+    assert.equal(stubs.service_3.hits.length, 0, "a locked floor must not reach the service");
+    assert.equal(lastTallies(breaker)?.service_3?.breaks ?? 0, before, "and must not count the vote");
+    control.send(JSON.stringify({ t: "arm", v: true }));
+    await sleep(400);
+  });
+
+  it("caps one socket without freezing the board", async () => {
+    const before = lastTallies(breaker)?.service_2?.breaks ?? 0;
+    for (let i = 0; i < 60; i += 1) breaker.send(JSON.stringify({ t: "vote", id: "service_2" }));
+    await sleep(1300);
+    const counted = (lastTallies(breaker)?.service_2?.breaks ?? 0) - before;
+    assert.ok(counted >= 5 && counted <= 20, counted + " of 60 votes counted");
+  });
+
+  it("resets the tallies back to a tie", async () => {
+    control.send(JSON.stringify({ t: "reset-counters" }));
+    await waitFor(
+      "back to 0-0",
+      () => {
+        const t = lastTallies(breaker);
+        return Boolean(t) && Object.values(t!).every((v) => v.breaks === 0 && v.fixes === 0);
+      },
+      { detail: () => JSON.stringify(lastTallies(breaker)) },
+    );
   });
 });

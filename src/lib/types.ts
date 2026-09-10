@@ -20,6 +20,24 @@ export interface PublicService {
 /** Current position of every toggle, keyed by service id. */
 export type StateMap = Record<string, boolean>;
 
+/** Which side of the tug-of-war a viewer is on. Assigned once, kept in a cookie. */
+export type Role = "breaker" | "fixer";
+
+/**
+ * The vote tally for one service.
+ *
+ * `on` is derived, never stored: the service is up while the fixers hold at
+ * least half the vote. Fixer share >= 50% reduces to `fixes >= breaks`, so the
+ * whole rule is one integer comparison and a 0-0 tie starts the service up.
+ */
+export interface Tally {
+  breaks: number;
+  fixes: number;
+  on: boolean;
+}
+
+export type TallyMap = Record<string, Tally>;
+
 /** Outcome of one outbound POST to a service's /on or /off endpoint. */
 export interface DispatchResult {
   id: string;
@@ -38,6 +56,7 @@ export type BusEvent =
   | { t: "full"; state: StateMap; ts: number }
   | { t: "dispatch"; r: DispatchResult }
   | { t: "taps"; delta: Record<string, number>; ts: number }
+  | { t: "votes"; delta: Record<string, { breaks: number; fixes: number }>; ts: number }
   | { t: "reset-counters"; ts: number }
   | { t: "conns"; replica: string; n: number; ts: number };
 
@@ -54,12 +73,14 @@ export type ClientMessage =
   | { t: "toggle"; id: string; v: boolean }
   | { t: "force"; id: string; v: boolean }
   | { t: "arm"; v: boolean }
+  | { t: "vote"; id: string }
   | { t: "reset-counters" }
   | { t: "ping" };
 
 /** Server -> browser. */
 export type ServerMessage =
-  | { t: "hello"; state: StateMap; armed: boolean; ts: number }
+  | { t: "hello"; state: StateMap; tallies: TallyMap; role: Role; armed: boolean; ts: number }
+  | { t: "tallies"; tallies: TallyMap; ts: number }
   | { t: "state"; id: string; v: boolean; ts: number }
   | { t: "armed"; v: boolean; ts: number }
   | { t: "full"; state: StateMap; ts: number }

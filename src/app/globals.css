@@ -18,6 +18,13 @@
   --label-idle: #9b9490;
   --hairline: rgba(255, 255, 255, 0.1);
 
+  /* The two teams. Red vs blue stays separable under every common form of
+     colour vision deficiency, unlike the red/green this deliberately avoids. */
+  --break: #d43d3d;
+  --break-bright: #ff6b6b;
+  --fix: #3d7fd4;
+  --fix-bright: #6bb0ff;
+
   --track-h: clamp(40px, 6.6dvh, 62px);
   /* Viewport-relative fallback; .card narrows this to its own width below. */
   --track-w: clamp(110px, 34vw, 200px);
@@ -221,8 +228,8 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: clamp(4px, 0.9dvh, 10px);
-  padding: clamp(6px, 1.2dvh, 14px) clamp(8px, 2.5vw, 16px);
+  gap: clamp(3px, 0.6dvh, 7px);
+  padding: clamp(5px, 0.9dvh, 10px) clamp(8px, 2.5vw, 16px);
   border: 1px solid var(--hairline);
   border-radius: var(--card-radius);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02));
@@ -235,7 +242,8 @@ body {
 
 .card-name {
   margin: 0;
-  font-size: clamp(10px, 1.8dvh, 14px);
+  flex: 0 0 auto;
+  font-size: clamp(10px, 1.55dvh, 13px);
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -565,4 +573,199 @@ body {
   padding: 10px;
   font-size: 11px;
   opacity: 0.8;
+}
+
+
+/* ---- role badge --------------------------------------------------------- */
+
+.role-badge {
+  margin: clamp(4px, 0.8dvh, 8px) auto 0;
+  width: fit-content;
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: clamp(9px, 1.3dvh, 11px);
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+
+.role-badge[data-role="breaker"] {
+  color: var(--break-bright);
+  border-color: rgba(212, 61, 61, 0.5);
+  background: rgba(212, 61, 61, 0.14);
+}
+
+.role-badge[data-role="fixer"] {
+  color: var(--fix-bright);
+  border-color: rgba(61, 127, 212, 0.5);
+  background: rgba(61, 127, 212, 0.16);
+}
+
+/* ---- battle bar --------------------------------------------------------- */
+
+.battle {
+  width: 100%;
+  max-width: 420px;
+}
+
+.battle-track {
+  position: relative;
+  display: flex;
+  height: clamp(10px, 1.7dvh, 15px);
+  border-radius: 999px;
+  overflow: visible;
+  background: var(--maroon-deep);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+.battle-side {
+  height: 100%;
+  /* Width is the contested number, so it animates rather than jumping. */
+  transition: width 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.battle-side--break {
+  background: linear-gradient(90deg, rgba(212, 61, 61, 0.55), var(--break));
+  border-radius: 999px 0 0 999px;
+}
+
+.battle-side--fix {
+  background: linear-gradient(90deg, var(--fix), rgba(61, 127, 212, 0.55));
+  border-radius: 0 999px 999px 0;
+}
+
+/* The spark sits exactly on the boundary -- the point both teams are pushing. */
+.battle-spark {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  transition: left 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.spark-core {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 8px #fff, 0 0 16px rgba(255, 255, 255, 0.8);
+  animation: spark-flicker 1.1s ease-in-out infinite;
+}
+
+.spark-halo {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.55) 0%, transparent 65%);
+  animation: spark-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes spark-flicker {
+  0%, 100% { opacity: 0.85; transform: translate(-50%, -50%) scale(1); }
+  50% { opacity: 1; transform: translate(-50%, -50%) scale(1.25); }
+}
+
+@keyframes spark-pulse {
+  0%, 100% { opacity: 0.35; transform: translate(-50%, -50%) scale(0.85); }
+  50% { opacity: 0.75; transform: translate(-50%, -50%) scale(1.15); }
+}
+
+.battle-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: clamp(3px, 0.7dvh, 7px);
+  font-size: clamp(9px, 1.4dvh, 11px);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+}
+
+.legend--break { color: var(--break-bright); }
+.legend--fix { color: var(--fix-bright); }
+
+.legend-state {
+  font-size: clamp(8px, 1.2dvh, 10px);
+  letter-spacing: 0.16em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  color: rgba(243, 231, 216, 0.6);
+}
+
+.legend-state[data-on="true"] {
+  color: #0d2a12;
+  background: var(--amber);
+  border-color: var(--amber-bright);
+}
+
+/* ---- vote button -------------------------------------------------------- */
+
+.vote {
+  appearance: none;
+  width: 100%;
+  max-width: 420px;
+  padding: clamp(7px, 1.25dvh, 12px);
+  border-radius: 11px;
+  font: inherit;
+  font-size: clamp(12px, 1.75dvh, 15px);
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  cursor: pointer;
+  color: #fff;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: transform 90ms ease, filter 140ms ease;
+}
+
+.vote[data-role="breaker"] {
+  border: 2px solid rgba(255, 107, 107, 0.75);
+  background: linear-gradient(180deg, rgba(212, 61, 61, 0.85), rgba(150, 30, 30, 0.9));
+  box-shadow: 0 0 16px rgba(212, 61, 61, 0.35);
+}
+
+.vote[data-role="fixer"] {
+  border: 2px solid rgba(107, 176, 255, 0.75);
+  background: linear-gradient(180deg, rgba(61, 127, 212, 0.85), rgba(24, 72, 140, 0.9));
+  box-shadow: 0 0 16px rgba(61, 127, 212, 0.35);
+}
+
+/* Every tap should feel like it landed, even though the bar waits for the
+   server's next frame. */
+.vote:active {
+  transform: scale(0.97);
+  filter: brightness(1.25);
+}
+
+.vote:disabled {
+  opacity: 0.4;
+  cursor: default;
+  box-shadow: none;
+}
+
+.vote:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spark-core,
+  .spark-halo {
+    animation: none;
+  }
+  .battle-side,
+  .battle-spark {
+    transition-duration: 1ms;
+  }
 }

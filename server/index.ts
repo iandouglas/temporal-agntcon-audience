@@ -6,7 +6,7 @@ import { adminToken, tokensMatch } from "../src/lib/config";
 import { closeDispatcher, poolStats } from "../src/lib/dispatch";
 import { Hub, type Client } from "../src/lib/hub";
 import { TokenBucket } from "../src/lib/ratelimit";
-import type { ClientMessage, ServerMessage } from "../src/lib/types";
+import type { ClientMessage, Role, ServerMessage } from "../src/lib/types";
 
 /**
  * Custom Node server so we can own the HTTP upgrade path.
@@ -32,6 +32,9 @@ const port = Number.parseInt(process.env.PORT ?? "3000", 10);
  */
 const bindHost = process.env.BIND_HOST ?? "::";
 
+/** Cookie that pins a viewer to a team across reloads. */
+const ROLE_COOKIE = "mep_role";
+
 const MAX_MESSAGE_BYTES = 1024;
 const PING_INTERVAL_MS = 25_000;
 
@@ -56,13 +59,15 @@ async function main(): Promise<void> {
     const { pathname, searchParams } = parseUrl(req);
 
     if (pathname === "/ws") {
-      const role = searchParams.get("role");
-      const control = role === "control";
+      const control = searchParams.get("role") === "control";
       if (control && !tokensMatch(searchParams.get("token"))) {
         reject(socket, 401, "Unauthorized");
         return;
       }
-      wss.handleUpgrade(req, socket, head, (ws) => attach(ws, hub, control));
+      // The page set this cookie moments ago; fall back for a socket that
+      // somehow arrives first.
+      const role = roleFromCookie(req) ?? hub.nextRole();
+      wss.handleUpgrade(req, socket, head, (ws) => attach(ws, hub, control, role));
       return;
     }
 
@@ -118,6 +123,17 @@ async function route(
     return;
   }
 
+  /*
+   * Hand out a team on the first page view and pin it in a cookie, so a reload
+   * keeps you on the same side. Set before Next writes the response: values
+   * from setHeader survive its writeHead call. Assignment is round-robin
+   * rather than random, which keeps the two teams even.
+   */
+  if (req.method === "GET" && pathname === "/" && !roleFromCookie(req)) {
+    const role = hub.nextRole();
+    res.setHeader("Set-Cookie", `${ROLE_COOKIE}=${role}; Path=/; Max-Age=86400; SameSite=Lax`);
+  }
+
   await handle(req, res);
 }
 
@@ -162,9 +178,10 @@ async function admin(
   json(res, 404, { error: "not found" });
 }
 
-function attach(ws: WebSocket, hub: Hub, control: boolean): void {
+function attach(ws: WebSocket, hub: Hub, control: boolean, role: Role): void {
   const client: Client = {
     control,
+    role,
     bucket: new TokenBucket(5, 10),
     send(message: ServerMessage) {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
@@ -202,6 +219,11 @@ function attach(ws: WebSocket, hub: Hub, control: boolean): void {
       return;
     }
 
+    if (message.t === "vote" && typeof message.id === "string") {
+      void hub.vote(message.id, client.role, { bucket: client.bucket });
+      return;
+    }
+
     if (message.t === "toggle" && typeof message.id === "string" && typeof message.v === "boolean") {
       void hub.toggle(message.id, message.v, { operator: false, bucket: client.bucket });
       return;
@@ -231,6 +253,12 @@ function attach(ws: WebSocket, hub: Hub, control: boolean): void {
   };
   ws.on("close", cleanup);
   ws.on("error", cleanup);
+}
+
+function roleFromCookie(req: IncomingMessage): Role | null {
+  const cookie = req.headers.cookie ?? "";
+  const match = new RegExp(`(?:^|;\\s*)${ROLE_COOKIE}=(breaker|fixer)`).exec(cookie);
+  return match ? (match[1] as Role) : null;
 }
 
 function parseUrl(req: IncomingMessage): { pathname: string; searchParams: URLSearchParams } {
