@@ -16,6 +16,7 @@ import type { BusEvent, StateMap } from "./types";
 
 const STATE_KEY = "switchboard:state";
 const ARMED_KEY = "switchboard:armed";
+const NAMES_KEY = "switchboard:names";
 const SEED_LOCK_KEY = "switchboard:seedlock";
 const CHANNEL = "switchboard:events";
 
@@ -31,6 +32,9 @@ export interface Bus {
   /** Whether the audience may drive the switches. Null means never set. */
   getArmed(): Promise<boolean | null>;
   setArmed(value: boolean): Promise<void>;
+  /** Display names, keyed by service id. Empty when none has been set. */
+  getNames(): Promise<Record<string, string>>;
+  setName(id: string, name: string): Promise<void>;
   acquireSeedLock(ttlSeconds: number): Promise<boolean>;
   releaseSeedLock(): Promise<void>;
   publish(event: BusEvent): Promise<void>;
@@ -57,6 +61,7 @@ class MemoryBus implements Bus {
   readonly connected = true;
   private state: StateMap | null = null;
   private armed: boolean | null = null;
+  private names: Record<string, string> = {};
   private lock = false;
   private handlers: Array<(event: BusEvent) => void> = [];
 
@@ -84,6 +89,14 @@ class MemoryBus implements Bus {
 
   async setArmed(value: boolean): Promise<void> {
     this.armed = value;
+  }
+
+  async getNames(): Promise<Record<string, string>> {
+    return { ...this.names };
+  }
+
+  async setName(id: string, name: string): Promise<void> {
+    this.names[id] = name;
   }
 
   async acquireSeedLock(): Promise<boolean> {
@@ -233,6 +246,15 @@ class RedisBus implements Bus {
 
   async setArmed(value: boolean): Promise<void> {
     await this.client.set(ARMED_KEY, value ? "1" : "0");
+  }
+
+  async getNames(): Promise<Record<string, string>> {
+    const hash = await this.client.hgetall(NAMES_KEY);
+    return hash ?? {};
+  }
+
+  async setName(id: string, name: string): Promise<void> {
+    await this.client.hset(NAMES_KEY, { [id]: name });
   }
 
   async acquireSeedLock(ttlSeconds: number): Promise<boolean> {

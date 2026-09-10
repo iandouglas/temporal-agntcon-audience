@@ -53,6 +53,7 @@ export interface DispatchResult {
 export type BusEvent =
   | { t: "state"; id: string; v: boolean; ts: number }
   | { t: "armed"; v: boolean; ts: number }
+  | { t: "names"; names: Record<string, string>; ts: number }
   | { t: "full"; state: StateMap; ts: number }
   | { t: "dispatch"; r: DispatchResult }
   | { t: "taps"; delta: Record<string, number>; ts: number }
@@ -74,15 +75,26 @@ export type ClientMessage =
   | { t: "force"; id: string; v: boolean }
   | { t: "arm"; v: boolean }
   | { t: "vote"; id: string }
+  | { t: "set-name"; id: string; name: string }
   | { t: "reset-counters" }
   | { t: "ping" };
 
 /** Server -> browser. */
 export type ServerMessage =
-  | { t: "hello"; state: StateMap; tallies: TallyMap; role: Role; armed: boolean; ts: number }
+  | {
+      t: "hello";
+      state: StateMap;
+      tallies: TallyMap;
+      names: Record<string, string>;
+      role: Role;
+      armed: boolean;
+      ts: number;
+    }
   | { t: "tallies"; tallies: TallyMap; ts: number }
+  | { t: "names"; names: Record<string, string>; ts: number }
   | { t: "state"; id: string; v: boolean; ts: number }
   | { t: "armed"; v: boolean; ts: number }
+  | { t: "names"; names: Record<string, string>; ts: number }
   | { t: "full"; state: StateMap; ts: number }
   | {
       t: "stats";

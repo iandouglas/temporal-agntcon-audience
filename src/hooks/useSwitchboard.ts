@@ -35,6 +35,11 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
   const [connected, setConnected] = useState(false);
   const [armed, setArmed] = useState(false);
   const [role, setRole] = useState<Role>("breaker");
+  // Seeded from the server-rendered props, then kept live by the socket, so a
+  // rename lands on every phone without a reload.
+  const [names, setNames] = useState<Record<string, string>>(() =>
+    Object.fromEntries(services.map((s) => [s.id, s.name])),
+  );
   const [tallies, setTallies] = useState<TallyMap>(() =>
     Object.fromEntries(services.map((s) => [s.id, { breaks: 0, fixes: 0, on: true }])),
   );
@@ -82,6 +87,7 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
           case "hello":
             setState(message.state);
             setTallies(message.tallies);
+            setNames(message.names);
             setRole(message.role);
             setArmed(message.armed);
             armedRef.current = message.armed;
@@ -89,6 +95,9 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
             break;
           case "tallies":
             setTallies(message.tallies);
+            break;
+          case "names":
+            setNames(message.names);
             break;
           case "full":
             setState(message.state);
@@ -176,5 +185,14 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
   /** Operator only: zero the tap counts and last-call history everywhere. */
   const resetCounters = useCallback((): void => send({ t: "reset-counters" }), [send]);
 
-  return { state, tallies, role, ready, connected, armed, stats, vote, toggle, force, arm, resetCounters };
+  /** Operator only: rename a service for the whole room, with no redeploy. */
+  const setName = useCallback(
+    (id: string, name: string): void => send({ t: "set-name", id, name }),
+    [send],
+  );
+
+  return {
+    state, tallies, names, role, ready, connected, armed, stats,
+    vote, toggle, force, arm, resetCounters, setName,
+  };
 }

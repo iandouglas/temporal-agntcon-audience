@@ -125,6 +125,7 @@ async function route(
       replica: hub.replicaId,
       conns: hub.totalConns(),
       armed: hub.isArmed(),
+      names: hub.getNames(),
       bus: hub.busStatus(),
       pool: poolStats(),
     });
@@ -168,6 +169,14 @@ async function admin(
     return;
   }
 
+  if (pathname === "/api/admin/name" && req.method === "POST") {
+    const id = parseUrl(req).searchParams.get("id") ?? "";
+    const name = parseUrl(req).searchParams.get("name") ?? "";
+    const ok = await hub.setName(id, name);
+    json(res, ok ? 200 : 400, ok ? { ok: true, names: hub.getNames() } : { error: "unknown id or bad name" });
+    return;
+  }
+
   if (pathname === "/api/admin/reset-counters" && req.method === "POST") {
     await hub.resetCounters();
     json(res, 200, { ok: true });
@@ -180,6 +189,7 @@ async function admin(
       replica: hub.replicaId,
       conns: hub.totalConns(),
       armed: hub.isArmed(),
+      names: hub.getNames(),
       bus: hub.busStatus(),
       state: hub.getState(),
       pool: poolStats(),
@@ -245,6 +255,16 @@ function attach(ws: WebSocket, hub: Hub, control: boolean, role: Role): void {
     // Opening and closing the floor is an operator action.
     if (message.t === "arm" && control && typeof message.v === "boolean") {
       void hub.setArmed(message.v);
+      return;
+    }
+
+    if (
+      message.t === "set-name" &&
+      control &&
+      typeof message.id === "string" &&
+      typeof message.name === "string"
+    ) {
+      void hub.setName(message.id, message.name);
       return;
     }
 

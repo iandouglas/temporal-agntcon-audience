@@ -77,6 +77,15 @@ export class Hub {
   private pendingVotes: Record<string, { breaks: number; fixes: number }> = {};
   /** Round-robin cursor, so the teams stay balanced instead of randomly lopsided. */
   private roleCursor = 0;
+
+  /**
+   * Display names, live-editable without a redeploy.
+   *
+   * Redis wins whenever it holds a name; the env var is only the seed for one
+   * that has never been set. Editing would be pointless otherwise -- a restart
+   * would quietly put the old name back.
+   */
+  private names: Record<string, string> = {};
   private timers: NodeJS.Timeout[] = [];
 
   private byId(id: string): ServiceConfig | undefined {
@@ -180,6 +189,7 @@ export class Hub {
    */
   private async seed(): Promise<void> {
     await this.seedArmed();
+    await this.seedNames();
 
     const existing = await this.bus.getState().catch(() => null);
     if (existing) {
@@ -228,6 +238,16 @@ export class Hub {
     }
     this.armed = stored;
     console.log(`[seed] audience controls are ${stored ? "UNLOCKED" : "LOCKED"}`);
+  }
+
+  /** Anything Redis already knows about wins over the env var. */
+  private async seedNames(): Promise<void> {
+    const stored = await this.bus.getNames().catch(() => ({}) as Record<string, string>);
+    for (const service of this.services) {
+      if (stored[service.id]) this.names[service.id] = stored[service.id];
+    }
+    const overridden = Object.keys(this.names).length;
+    if (overridden > 0) console.log(`[names] ${overridden} name(s) loaded from ${this.bus.kind}`);
   }
 
   isArmed(): boolean {
@@ -321,6 +341,29 @@ export class Hub {
   /** A 0-0 tie counts as fixers holding half the vote, so services start up. */
   private static isOn(t: { breaks: number; fixes: number }): boolean {
     return t.fixes >= t.breaks;
+  }
+
+  getNames(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const service of this.services) out[service.id] = this.names[service.id] ?? service.name;
+    return out;
+  }
+
+  /** Rename a service for everyone, immediately, with no redeploy. */
+  async setName(id: string, name: string): Promise<boolean> {
+    const service = this.byId(id);
+    const trimmed = name.trim();
+    if (!service || trimmed === "" || trimmed.length > 40) return false;
+    this.names[id] = trimmed;
+    try {
+      await this.bus.setName(id, trimmed);
+    } catch (err) {
+      // A rename that only reaches the live clients is still better than none;
+      // it just will not survive a restart.
+      console.error(`[names] could not persist ${id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    this.broadcast({ t: "names", names: this.getNames(), ts: Date.now() });
+    return true;
   }
 
   getTallies(): TallyMap {
@@ -509,6 +552,7 @@ export class Hub {
       t: "hello",
       state: this.getState(),
       tallies: this.getTallies(),
+      names: this.getNames(),
       role: client.role,
       armed: this.armed,
       ts: Date.now(),
