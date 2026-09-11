@@ -120,6 +120,15 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
           `page scrolls vertically: ${report.scrollHeight} > ${report.viewportHeight}`);
         assert.ok(report.scrollWidth <= report.viewportWidth + 1,
           `page scrolls horizontally: ${report.scrollWidth} > ${report.viewportWidth}`);
+
+        const badge = await page.$eval(".role-badge", (el) => ({
+          width: Math.ceil(el.getBoundingClientRect().width),
+          overflows: el.scrollWidth > el.clientWidth + 1,
+          text: el.textContent?.replace(/\s+/g, " ").trim(),
+        }));
+        assert.ok(!badge.overflows, `role badge is cut off: "${badge.text}"`);
+        assert.ok(badge.width <= report.viewportWidth,
+          `role badge (${badge.width}px) is wider than the viewport (${report.viewportWidth}px)`);
         await page.context().close();
       });
     }
@@ -165,8 +174,11 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
       assert.match(b.background, /212, 61, 61|rgb\(212/);
       assert.match(f.background, /61, 127, 212|rgb\(61/);
 
-      assert.equal((await breakerPage.textContent(".role-badge"))?.trim(), "you are a breaker");
-      assert.equal((await fixerPage.textContent(".role-badge"))?.trim(), "you are a fixer");
+      // The badge now tells you what your team is for, not just its name.
+      assert.match((await breakerPage.textContent(".role-badge"))!.replace(/\s+/g, " ").trim(),
+        /^You are a breaker: help take the systems offline!$/);
+      assert.match((await fixerPage.textContent(".role-badge"))!.replace(/\s+/g, " ").trim(),
+        /^You are a fixer: help keep things online!$/);
       await breakerPage.context().close();
       await fixerPage.context().close();
     });
