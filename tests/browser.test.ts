@@ -125,8 +125,12 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
           width: Math.ceil(el.getBoundingClientRect().width),
           overflows: el.scrollWidth > el.clientWidth + 1,
           text: el.textContent?.replace(/\s+/g, " ").trim(),
+          transform: getComputedStyle(el.querySelector("strong")!).textTransform,
         }));
         assert.ok(!badge.overflows, `role badge is cut off: "${badge.text}"`);
+        // textContent cannot see text-transform, so assert the rendered casing
+        // directly: `capitalize` once title-cased this into "You Are A Breaker".
+        assert.equal(badge.transform, "none", `role badge is being re-cased to ${badge.transform}`);
         assert.ok(badge.width <= report.viewportWidth,
           `role badge (${badge.width}px) is wider than the viewport (${report.viewportWidth}px)`);
         await page.context().close();

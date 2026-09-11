@@ -596,9 +596,13 @@ body {
   white-space: nowrap;
 }
 
+/*
+ * No text-transform here. `capitalize` title-cased the whole clause -- "You Are
+ * A Breaker:" -- and textContent is blind to text-transform, so the assertion
+ * on the text passed while the render was wrong.
+ */
 .role-badge strong {
   font-weight: 800;
-  text-transform: capitalize;
 }
 
 .role-hint {
