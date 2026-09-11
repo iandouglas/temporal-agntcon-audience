@@ -626,13 +626,13 @@ body {
   transition: width 220ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.battle-side--break {
-  background: linear-gradient(90deg, rgba(212, 61, 61, 0.55), var(--break));
+.battle-side--fix {
+  background: linear-gradient(90deg, var(--fix), rgba(61, 127, 212, 0.6));
   border-radius: 999px 0 0 999px;
 }
 
-.battle-side--fix {
-  background: linear-gradient(90deg, var(--fix), rgba(61, 127, 212, 0.55));
+.battle-side--break {
+  background: linear-gradient(90deg, rgba(212, 61, 61, 0.6), var(--break));
   border-radius: 0 999px 999px 0;
 }
 
@@ -805,4 +805,13 @@ body {
   letter-spacing: 0.14em;
   color: var(--amber-bright);
   opacity: 0.8;
+}
+
+
+/* The raw click counts sit beside each share: a bar that has taken thousands
+   of votes barely moves, but the numbers still tell the story. */
+.legend-count {
+  font-weight: 600;
+  font-size: 0.85em;
+  opacity: 0.75;
 }

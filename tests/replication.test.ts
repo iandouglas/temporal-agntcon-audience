@@ -9,7 +9,7 @@ import { after, before, describe, it } from "node:test";
 import { WebSocket } from "ws";
 import { once } from "node:events";
 import {
-  adminState, connect, connectControl, hasRedisServer, hello, lastStats, sawArmed, sawState,
+  adminState, connect, connectControl, hasRedisServer, hello, lastStats, lastTallies, sawArmed, sawState,
   sleep, startRedis, startReplica, startStub, waitFor,
   type Client, type RedisHandle, type Replica, type Stub,
 } from "./helpers";
@@ -147,6 +147,88 @@ describe("replication", { skip }, () => {
         () => (lastStats(control)?.taps.service_4 ?? 0) === start + 2,
         { detail: () => `started at ${start}, now ${JSON.stringify(lastStats(control)?.taps)}` },
       );
+    });
+
+    it("shares vote counts between phones on different replicas", async () => {
+      // The bug this covers: each replica kept a private scoreboard, so three
+      // phones on three replicas each saw only their own clicks. Two fixers
+      // both read 100% while the breaker read 100% broken.
+      const control = await connectControl(a.base, TOKEN);
+      await sleep(300);
+      control.send(JSON.stringify({ t: "arm", v: true }));
+      control.send(JSON.stringify({ t: "reset-counters" }));
+      await sleep(900);
+
+      const fixerOnA = await connect(a.base, "", "fixer");
+      const fixerOnB = await connect(b.base, "", "fixer");
+      const breakerOnB = await connect(b.base, "", "breaker");
+      await sleep(500);
+
+      const tally = (c: Client): { breaks: number; fixes: number } | undefined => {
+        const t = lastTallies(c) ?? hello(c)?.tallies;
+        return t?.service_2;
+      };
+
+      // Two fixers on two different replicas, one break on a third socket.
+      fixerOnA.send(JSON.stringify({ t: "vote", id: "service_2" }));
+      await sleep(300);
+      fixerOnB.send(JSON.stringify({ t: "vote", id: "service_2" }));
+      await sleep(300);
+      breakerOnB.send(JSON.stringify({ t: "vote", id: "service_2" }));
+
+      // Every socket, whichever replica it is on, must converge on 2 fixes and
+      // 1 break -- not on its own replica's private subset.
+      for (const [label, client] of [
+        ["fixer on A", fixerOnA],
+        ["fixer on B", fixerOnB],
+        ["breaker on B", breakerOnB],
+      ] as const) {
+        await waitFor(
+          `${label} sees every vote`,
+          () => {
+            const t = tally(client);
+            return t?.fixes === 2 && t?.breaks === 1;
+          },
+          { detail: () => `${label} saw ${JSON.stringify(tally(client))}` },
+        );
+      }
+
+      // 2 fixes >= 1 break, so it stays up for everyone.
+      for (const client of [fixerOnA, fixerOnB, breakerOnB]) {
+        assert.equal((lastTallies(client) ?? hello(client)?.tallies)?.service_2?.on, true);
+      }
+
+      fixerOnA.close();
+      fixerOnB.close();
+      breakerOnB.close();
+      control.close();
+    });
+
+    it("does not double-count a replica's own votes coming back off the bus", async () => {
+      const control = await connectControl(a.base, TOKEN);
+      await sleep(300);
+      control.send(JSON.stringify({ t: "arm", v: true }));
+      control.send(JSON.stringify({ t: "reset-counters" }));
+      await sleep(900);
+
+      const phone = await connect(a.base, "", "breaker");
+      await sleep(400);
+
+      for (let i = 0; i < 3; i += 1) {
+        phone.send(JSON.stringify({ t: "vote", id: "service_4" }));
+        await sleep(300);
+      }
+
+      await waitFor(
+        "exactly three breaks, not six",
+        () => (lastTallies(phone)?.service_4?.breaks ?? 0) === 3,
+        { detail: () => JSON.stringify(lastTallies(phone)?.service_4) },
+      );
+      await sleep(800); // give any echo time to arrive
+      assert.equal(lastTallies(phone)?.service_4?.breaks, 3, "an echoed delta must not be applied twice");
+
+      phone.close();
+      control.close();
     });
 
     it("carries a rename to phones on the other replica", async () => {
