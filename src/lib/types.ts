@@ -57,7 +57,7 @@ export type BusEvent =
   | { t: "full"; state: StateMap; ts: number }
   | { t: "dispatch"; r: DispatchResult }
   | { t: "taps"; delta: Record<string, number>; ts: number }
-  | { t: "votes"; delta: Record<string, { breaks: number; fixes: number }>; ts: number }
+  | { t: "votes"; replica: string; delta: Record<string, { breaks: number; fixes: number }>; ts: number }
   | { t: "reset-counters"; ts: number }
   | { t: "names"; names: Record<string, string>; ts: number }
   | { t: "conns"; replica: string; n: number; ts: number };

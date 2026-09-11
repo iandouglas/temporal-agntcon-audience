@@ -17,6 +17,7 @@ import type { BusEvent, StateMap } from "./types";
 const STATE_KEY = "switchboard:state";
 const ARMED_KEY = "switchboard:armed";
 const NAMES_KEY = "switchboard:names";
+const VOTES_KEY = "switchboard:votes";
 const SEED_LOCK_KEY = "switchboard:seedlock";
 const CHANNEL = "switchboard:events";
 
@@ -35,6 +36,9 @@ export interface Bus {
   /** Display names, keyed by service id. Empty when none has been set. */
   getNames(): Promise<Record<string, string>>;
   setName(id: string, name: string): Promise<void>;
+  /** Vote counts, flat "<id>:breaks" / "<id>:fixes" keys. */
+  getVotes(): Promise<Record<string, string>>;
+  putVotes(flat: Record<string, string>): Promise<void>;
   acquireSeedLock(ttlSeconds: number): Promise<boolean>;
   releaseSeedLock(): Promise<void>;
   publish(event: BusEvent): Promise<void>;
@@ -62,6 +66,7 @@ class MemoryBus implements Bus {
   private state: StateMap | null = null;
   private armed: boolean | null = null;
   private names: Record<string, string> = {};
+  private votes: Record<string, string> = {};
   private lock = false;
   private handlers: Array<(event: BusEvent) => void> = [];
 
@@ -97,6 +102,14 @@ class MemoryBus implements Bus {
 
   async setName(id: string, name: string): Promise<void> {
     this.names[id] = name;
+  }
+
+  async getVotes(): Promise<Record<string, string>> {
+    return { ...this.votes };
+  }
+
+  async putVotes(flat: Record<string, string>): Promise<void> {
+    this.votes = { ...this.votes, ...flat };
   }
 
   async acquireSeedLock(): Promise<boolean> {
@@ -255,6 +268,16 @@ class RedisBus implements Bus {
 
   async setName(id: string, name: string): Promise<void> {
     await this.client.hset(NAMES_KEY, { [id]: name });
+  }
+
+  async getVotes(): Promise<Record<string, string>> {
+    const hash = await this.client.hgetall(VOTES_KEY);
+    return hash ?? {};
+  }
+
+  async putVotes(flat: Record<string, string>): Promise<void> {
+    if (Object.keys(flat).length === 0) return;
+    await this.client.hset(VOTES_KEY, flat);
   }
 
   async acquireSeedLock(ttlSeconds: number): Promise<boolean> {

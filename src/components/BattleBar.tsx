@@ -9,33 +9,39 @@ interface Props {
 /**
  * The tug-of-war between the two teams for one service.
  *
- * Share is votes out of total, so a 0-0 tie sits at the middle and the very
- * first vote swings it to one end. The spark rides the boundary, which makes
- * the contested point the brightest thing on the card.
+ * Fixers hold the left, breakers the right, and each end shows both its share
+ * and its raw click count -- the count is what makes a stiff bar legible, since
+ * late in a heavily-voted round the percentage barely moves but the numbers
+ * still climb. Share is votes out of total, so a 0-0 tie sits in the middle and
+ * the very first vote swings it to one end.
  */
 export function BattleBar({ tally }: Props) {
   const total = tally.breaks + tally.fixes;
   // A tie reads as an even split rather than as a divide-by-zero.
-  const breakShare = total === 0 ? 0.5 : tally.breaks / total;
-  const breakPct = Math.round(breakShare * 100);
-  const fixPct = 100 - breakPct;
+  const fixShare = total === 0 ? 0.5 : tally.fixes / total;
+  const fixPct = Math.round(fixShare * 100);
+  const breakPct = 100 - fixPct;
 
   return (
     <div className="battle" data-on={tally.on}>
       <div className="battle-track">
-        <div className="battle-side battle-side--break" style={{ width: `${breakShare * 100}%` }} />
-        <div className="battle-side battle-side--fix" style={{ width: `${(1 - breakShare) * 100}%` }} />
-        <div className="battle-spark" style={{ left: `${breakShare * 100}%` }} aria-hidden="true">
+        <div className="battle-side battle-side--fix" style={{ width: `${fixShare * 100}%` }} />
+        <div className="battle-side battle-side--break" style={{ width: `${(1 - fixShare) * 100}%` }} />
+        <div className="battle-spark" style={{ left: `${fixShare * 100}%` }} aria-hidden="true">
           <span className="spark-core" />
           <span className="spark-halo" />
         </div>
       </div>
       <div className="battle-legend">
-        <span className="legend legend--break">{breakPct}%</span>
+        <span className="legend legend--fix">
+          {fixPct}% <span className="legend-count">({tally.fixes} fixes)</span>
+        </span>
         <span className="legend-state" data-on={tally.on}>
           {tally.on ? "UP" : "DOWN"}
         </span>
-        <span className="legend legend--fix">{fixPct}%</span>
+        <span className="legend legend--break">
+          <span className="legend-count">({tally.breaks} breaks)</span> {breakPct}%
+        </span>
       </div>
     </div>
   );

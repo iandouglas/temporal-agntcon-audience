@@ -176,7 +176,7 @@ export class Hub {
     this.timers.push(setInterval(() => this.broadcastStats(), 1000));
     // 10Hz is smoother than the eye needs and costs each phone ~10 frames a
     // second instead of one per vote from the whole room.
-    this.timers.push(setInterval(() => this.broadcastTallies(), 100));
+    this.timers.push(setInterval(() => void this.flushVotes(), 120));
   }
 
   /**
@@ -190,6 +190,7 @@ export class Hub {
   private async seed(): Promise<void> {
     await this.seedArmed();
     await this.seedNames();
+    await this.seedVotes();
 
     const existing = await this.bus.getState().catch(() => null);
     if (existing) {
@@ -250,6 +251,24 @@ export class Hub {
     if (overridden > 0) console.log(`[names] ${overridden} name(s) loaded from ${this.bus.kind}`);
   }
 
+  /** Recover the scoreboard so a restart mid-demo does not reset every bar. */
+  private async seedVotes(): Promise<void> {
+    const flat = await this.bus.getVotes().catch(() => ({}) as Record<string, string>);
+    let recovered = 0;
+    for (const service of this.services) {
+      const breaks = Number.parseInt(flat[`${service.id}:breaks`] ?? "", 10);
+      const fixes = Number.parseInt(flat[`${service.id}:fixes`] ?? "", 10);
+      if (Number.isFinite(breaks) && Number.isFinite(fixes)) {
+        const t = { breaks, fixes, on: true };
+        t.on = Hub.isOn(t);
+        this.tallies[service.id] = t;
+        this.state[service.id] = t.on;
+        recovered += 1;
+      }
+    }
+    if (recovered > 0) console.log(`[votes] recovered ${recovered} tall(ies) from ${this.bus.kind}`);
+  }
+
   isArmed(): boolean {
     return this.armed;
   }
@@ -291,6 +310,9 @@ export class Hub {
       this.taps[service.id] = 0;
       this.lastDispatch[service.id] = null;
       this.tallies[service.id] = { breaks: 0, fixes: 0, on: true };
+      void this.bus
+        .putVotes({ [`${service.id}:breaks`]: "0", [`${service.id}:fixes`]: "0" })
+        .catch(() => undefined);
 
       if (this.state[service.id] !== true) {
         this.state[service.id] = true;
@@ -423,10 +445,34 @@ export class Hub {
     }
   }
 
-  /** Throttled tally frame. One snapshot beats hundreds of deltas. */
-  private broadcastTallies(): void {
-    if (Object.keys(this.pendingVotes).length === 0) return;
+  /**
+   * Throttled vote flush.
+   *
+   * This used to broadcast locally, which meant every replica kept a private
+   * scoreboard: three phones on three replicas each saw only their own votes.
+   * Deltas now go over the bus so every replica converges on the same counts,
+   * and the same tick writes them behind to Redis so a restart does not wipe
+   * the game.
+   */
+  private async flushVotes(): Promise<void> {
+    const delta = this.pendingVotes;
+    // Nothing of ours to send. A peer's votes repaint from applyBusEvent, so
+    // there is no need to push an unchanged frame at every client eight times a
+    // second.
+    if (Object.keys(delta).length === 0) return;
     this.pendingVotes = {};
+
+    const flat: Record<string, string> = {};
+    for (const service of this.services) {
+      const t = this.tallies[service.id];
+      if (!t) continue;
+      flat[`${service.id}:breaks`] = String(t.breaks);
+      flat[`${service.id}:fixes`] = String(t.fixes);
+    }
+
+    await this.replicate({ t: "votes", replica: this.replicaId, delta, ts: Date.now() }, () =>
+      this.bus.putVotes(flat),
+    );
     this.broadcast({ t: "tallies", tallies: this.getTallies(), ts: Date.now() });
   }
 
@@ -508,6 +554,25 @@ export class Hub {
           for (const [id, delta] of Object.entries(event.delta)) {
             this.taps[id] = (this.taps[id] ?? 0) + delta;
           }
+        }
+        break;
+      case "votes":
+        /*
+         * Our own delta comes back off the bus; we already applied it when the
+         * vote arrived, so adding it again would double-count. Only a peer's
+         * votes need applying -- and never dispatch from here, because the
+         * originating replica owns the transition and its POST.
+         */
+        if (event.replica !== this.replicaId) {
+          for (const [id, d] of Object.entries(event.delta)) {
+            const t = this.tallies[id] ?? { breaks: 0, fixes: 0, on: true };
+            t.breaks += d.breaks;
+            t.fixes += d.fixes;
+            t.on = Hub.isOn(t);
+            this.tallies[id] = t;
+            this.state[id] = t.on;
+          }
+          this.broadcast({ t: "tallies", tallies: this.getTallies(), ts: event.ts });
         }
         break;
       case "names":
