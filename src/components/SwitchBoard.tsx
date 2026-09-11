@@ -38,7 +38,10 @@ export function SwitchBoard({ services, title, subtitle }: Props) {
           {status}
         </p>
         <p className="role-badge" data-role={role}>
-          you are a {role}
+          <strong>You are a {role}:</strong>{" "}
+          <span className="role-hint">
+            {role === "fixer" ? "help keep things online!" : "help take the systems offline!"}
+          </span>
         </p>
       </header>
 

@@ -578,16 +578,31 @@ body {
 
 /* ---- role badge --------------------------------------------------------- */
 
+/*
+ * Wide letter-spacing and uppercase suited two words; they do not survive
+ * "help take the systems offline!" on a 375px phone. Sentence case with tight
+ * tracking keeps the whole instruction on one line.
+ */
 .role-badge {
   margin: clamp(4px, 0.8dvh, 8px) auto 0;
   width: fit-content;
-  padding: 3px 12px;
+  max-width: 100%;
+  padding: 4px 13px;
   border-radius: 999px;
-  font-size: clamp(9px, 1.3dvh, 11px);
-  font-weight: 800;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: clamp(9.5px, 1.35dvh, 12px);
+  font-weight: 600;
+  letter-spacing: 0.02em;
   border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.role-badge strong {
+  font-weight: 800;
+  text-transform: capitalize;
+}
+
+.role-hint {
+  opacity: 0.85;
 }
 
 .role-badge[data-role="breaker"] {
