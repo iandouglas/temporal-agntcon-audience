@@ -1,5 +1,11 @@
-/** A toggle's identity. `mcp` is the agent<->MCP connection; the rest are the APIs it calls. */
-export type ToggleKind = "mcp" | "api";
+/**
+ * A toggle's identity.
+ *
+ * `worker` is the agent's own process: the audience votes it down and the
+ * worker kills itself after reading `/chaos`. Nothing is dispatched to it,
+ * which is why it is a kind of its own rather than an `api` with no URL.
+ */
+export type ToggleKind = "mcp" | "api" | "worker";
 
 /** Server-side view of a toggle. `baseUrl` MUST NOT be sent to the browser. */
 export interface ServiceConfig {
@@ -19,6 +25,20 @@ export interface PublicService {
 
 /** Current position of every toggle, keyed by service id. */
 export type StateMap = Record<string, boolean>;
+
+/**
+ * One switch as the admin REST endpoint reports it.
+ *
+ * Both fields on purpose. The stage screen reads `up` and ignores the
+ * percentage; the agent worker's watchdog reads `percent` and ignores `up`.
+ * `health()` guarantees they never contradict each other.
+ */
+export interface HealthValue {
+  up: boolean;
+  percent: number;
+}
+
+export type HealthMap = Record<string, HealthValue>;
 
 /** Which side of the tug-of-war a viewer is on. Assigned once, kept in a cookie. */
 export type Role = "breaker" | "fixer";

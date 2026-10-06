@@ -41,14 +41,33 @@ let cached: ServiceConfig[] | null = null;
 export function getServices(): ServiceConfig[] {
   if (cached) return cached;
 
-  const services: ServiceConfig[] = [
-    {
-      id: "mcp",
-      name: env("mcp_name") ?? "AGENT ↔ MCP SERVER",
-      kind: "mcp",
-      baseUrl: normalizeBase(env("mcp_url")),
-    },
-  ];
+  const services: ServiceConfig[] = [];
+
+  /*
+   * The agent's own worker process, first because it is first in the call
+   * path: agent -> MCP -> APIs. It is the only switch that kills a real
+   * process rather than flipping a flag, so it is also the one worth having
+   * at the top of the phone.
+   *
+   * It has no URL by design. Nothing is POSTed to it -- the worker polls
+   * `/chaos` and exits on its own when the breakers get ahead. Set
+   * `agent_worker=0` to drop the card entirely, for a rehearsal where nobody
+   * is running a worker.
+   */
+  if (env("agent_worker") !== "0") {
+    services.push({
+      id: "agent_worker",
+      name: env("agent_worker_name") ?? "AGENT WORKER",
+      kind: "worker",
+    });
+  }
+
+  services.push({
+    id: "mcp",
+    name: env("mcp_name") ?? "AGENT ↔ MCP SERVER",
+    kind: "mcp",
+    baseUrl: normalizeBase(env("mcp_url")),
+  });
 
   const highest = Math.max(4, highestConfiguredApiIndex());
   for (let i = 1; i <= highest; i += 1) {
@@ -105,6 +124,11 @@ export function redisUrl(): string | undefined {
 export function validateServices(services: ServiceConfig[]): string[] {
   const problems: string[] = [];
   for (const service of services) {
+    // The worker has nothing to call: it reads /chaos and exits on its own.
+    // Warning about a URL it is never meant to have would train the operator
+    // to ignore this list, which is the opposite of the point.
+    if (service.kind === "worker") continue;
+
     const envName = service.id === "mcp" ? "mcp_url" : `${service.id}_url`;
     if (!service.baseUrl) {
       problems.push(`${envName} is not set — "${service.name}" will toggle but call nothing.`);

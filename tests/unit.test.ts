@@ -118,13 +118,33 @@ describe("config", () => {
     resetConfigCache();
   });
 
-  it("always produces the MCP toggle first, then four APIs", () => {
+  it("orders the switches down the call path: worker, MCP, then four APIs", () => {
     const services = getServices();
-    assert.equal(services.length, 5);
+    assert.equal(services.length, 6);
+    assert.deepEqual(services.map((s) => s.id), [
+      "agent_worker", "mcp", "service_1", "service_2", "service_3", "service_4",
+    ]);
+    assert.deepEqual(services.map((s) => s.kind), [
+      "worker", "mcp", "api", "api", "api", "api",
+    ]);
+  });
+
+  it("gives the worker no URL, because nothing is ever POSTed to it", () => {
+    const worker = getServices().find((s) => s.id === "agent_worker");
+    assert.equal(worker?.baseUrl, undefined);
+    // ...and it must not be reported as a misconfiguration, or the operator
+    // learns to ignore the boot warnings that do matter.
+    assert.ok(!validateServices(getServices()).some((p) => p.includes("agent_worker")));
+  });
+
+  it("can be dropped for a rehearsal with no worker running", () => {
+    process.env.agent_worker = "0";
+    resetConfigCache();
+    const services = getServices();
+    assert.ok(!services.some((s) => s.id === "agent_worker"));
     assert.equal(services[0].id, "mcp");
-    assert.equal(services[0].kind, "mcp");
-    assert.deepEqual(services.slice(1).map((s) => s.id), ["service_1", "service_2", "service_3", "service_4"]);
-    assert.ok(services.slice(1).every((s) => s.kind === "api"));
+    delete process.env.agent_worker;
+    resetConfigCache();
   });
 
   it("keeps a switch even when its URL is missing", () => {
@@ -145,7 +165,7 @@ describe("config", () => {
   it("strips trailing slashes so paths do not double up", () => {
     process.env.mcp_url = "http://example.test:8080///";
     resetConfigCache();
-    assert.equal(getServices()[0].baseUrl, "http://example.test:8080");
+    assert.equal(getServices().find((s) => s.id === "mcp")?.baseUrl, "http://example.test:8080");
   });
 
   it("never exposes a base URL to the browser", () => {

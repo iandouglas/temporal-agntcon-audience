@@ -426,7 +426,7 @@ describe("without Redis", () => {
     assert.match(replica.log(), /REDIS_URL is not set/);
     const state = await adminState(replica.base, TOKEN);
     assert.equal(state.bus.kind, "memory");
-    assert.equal(state.state.mcp, true);
+    assert.equal(state.state.mcp.up, true);
     assert.equal(state.armed, false, "still locked by default without Redis");
 
     const control = await connectControl(replica.base, TOKEN);

@@ -20,7 +20,7 @@ export function ServiceCard({ service, tally, role, disabled, onVote }: Props) {
   const breaking = role === "breaker";
 
   return (
-    <div className={`card${service.kind === "mcp" ? " card--mcp" : ""}`}>
+    <div className={`card${service.kind === "api" ? "" : ` card--${service.kind}`}`}>
       <p className="card-name">{service.name}</p>
       <BattleBar tally={tally} />
       <button

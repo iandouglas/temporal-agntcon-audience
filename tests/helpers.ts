@@ -223,9 +223,23 @@ export interface AdminState {
   conns: number;
   armed: boolean;
   bus: { kind: string; healthy: boolean; failures: number; lastError: string | null };
-  state: Record<string, boolean>;
+  /** `{ up, percent }` per service -- what the stage screen reads. */
+  state: Record<string, { up: boolean; percent: number }>;
+  taps: Record<string, number>;
   pool: { inFlight: number; queued: number };
   services: Array<{ id: string; name: string; kind: string; configured: boolean }>;
+}
+
+/** The unauthenticated feed the agent worker's watchdog polls. */
+export interface ChaosState {
+  ok: boolean;
+  armed: boolean;
+  state: Record<string, number>;
+}
+
+export async function chaosState(base: string): Promise<ChaosState> {
+  const res = await fetch(`${base}/chaos`);
+  return (await res.json()) as ChaosState;
 }
 
 export async function adminState(base: string, token: string): Promise<AdminState> {

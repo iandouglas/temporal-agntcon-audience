@@ -93,7 +93,7 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
     before(async () => { await arm(true); });
 
     for (const viewport of VIEWPORTS) {
-      it(`fits all five switches on ${viewport.name} with no scrolling`, async () => {
+      it(`fits all six switches on ${viewport.name} with no scrolling`, async () => {
         const page = await openBoard(viewport);
         const report = await page.evaluate(() => {
           const cards = [...document.querySelectorAll(".card")];
@@ -113,7 +113,7 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
           };
         });
 
-        assert.equal(report.count, 5, "all five cards should render");
+        assert.equal(report.count, 6, "all six cards should render");
         assert.equal(report.namesClipped, 0, "no service name may be clipped");
         assert.ok(report.allVisible, `last switch ends at ${report.lastBottom} of ${report.viewportHeight}`);
         assert.ok(report.scrollHeight <= report.viewportHeight + 1,
@@ -137,17 +137,22 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
       });
     }
 
-    it("puts the MCP switch above the four APIs", async () => {
+    it("puts the worker and the MCP switch above the four APIs", async () => {
       const page = await openBoard(VIEWPORTS[1]);
       const tops = await page.$$eval(".card", (els) =>
         els.map((el) => ({
           name: el.querySelector(".card-name")?.textContent?.trim(),
           top: el.getBoundingClientRect().top,
         })));
-      assert.equal(tops.length, 5);
+      assert.equal(tops.length, 6);
       const mcp = tops.find((t) => t.name === "AGENT MCP")!;
-      assert.ok(tops.filter((t) => t !== mcp).every((t) => t.top > mcp.top),
-        "the MCP card must sit above every API card");
+      const worker = tops.find((t) => t.name === "AGENT WORKER")!;
+      const apis = tops.filter((t) => t !== mcp && t !== worker);
+      assert.ok(apis.every((t) => t.top > mcp.top), "the MCP card must sit above every API card");
+      assert.ok(apis.every((t) => t.top > worker.top), "the worker card must sit above every API card");
+      // They share the top tier, stacked in portrait and side by side once
+      // there is width, so the worker is never below the MCP card.
+      assert.ok(worker.top <= mcp.top, "the worker card must not sit below the MCP card");
       await page.context().close();
     });
   });
@@ -187,32 +192,50 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
       await fixerPage.context().close();
     });
 
-    it("starts every bar at a 50/50 tie", async () => {
+    it("starts each bar where the switch it describes actually sits", async () => {
+      /*
+       * An unvoted switch is a 0-0 tie, which is 50% and reads UP. But the
+       * stubs report SERVICE 1, 3 and 4 as down at boot, and a bar sitting at
+       * the tipping point above a card reading DOWN is the inconsistency this
+       * suite exists to catch -- it is what the projector would draw.
+       */
       const page = await openBoard(VIEWPORTS[1], "breaker");
       const bars = await page.$$eval(".card", (cards) =>
         cards.map((c) => ({
+          name: c.querySelector(".card-name")?.textContent?.trim(),
           br: c.querySelector(".legend--break")?.textContent?.trim(),
           fx: c.querySelector(".legend--fix")?.textContent?.trim(),
           state: c.querySelector(".legend-state")?.textContent?.trim(),
         })));
-      assert.equal(bars.length, 5);
+      assert.equal(bars.length, 6);
+
+      const up = ["AGENT WORKER", "AGENT MCP", "SERVICE 2"];
       for (const bar of bars) {
-        // "50% (0 fixes)" and "(0 breaks) 50%"
-        assert.match(bar.fx!, /^50%\s+\(0 fixes\)$/, bar.fx);
-        assert.match(bar.br!, /^\(0 breaks\)\s+50%$/, bar.br);
-        assert.equal(bar.state, "UP");
+        if (up.includes(bar.name!)) {
+          // Untouched and healthy: "50% (0 fixes)" / "(0 breaks) 50%".
+          assert.match(bar.fx!, /^50%\s+\(0 fixes\)$/, `${bar.name}: ${bar.fx}`);
+          assert.match(bar.br!, /^\(0 breaks\)\s+50%$/, `${bar.name}: ${bar.br}`);
+          assert.equal(bar.state, "UP", bar.name);
+        } else {
+          // Seeded down from /health, so the bar has to say so too.
+          assert.equal(bar.state, "DOWN", bar.name);
+          assert.match(bar.fx!, /^0%\s+\(0 fixes\)$/, `${bar.name}: ${bar.fx}`);
+        }
       }
       await page.context().close();
     });
 
     it("moves the bar and the spark when a vote lands, and calls the service on the flip", async () => {
+      // SERVICE 2, because it is the only API stub that reports healthy at
+      // boot -- the beat under test is a tie being broken, which needs a
+      // switch that starts tied.
       const page = await openBoard(VIEWPORTS[1], "breaker");
-      stubs[1].hits.length = 0;
+      stubs[2].hits.length = 0;
 
       const readTaco = () =>
         page.evaluate(() => {
           const card = [...document.querySelectorAll(".card")].find(
-            (c) => c.querySelector(".card-name")?.textContent?.trim() === "SERVICE 1",
+            (c) => c.querySelector(".card-name")?.textContent?.trim() === "SERVICE 2",
           )!;
           return {
             br: card.querySelector(".legend--break")?.textContent?.trim(),
@@ -226,7 +249,7 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
       const vote = () =>
         page.evaluate(() => {
           const card = [...document.querySelectorAll(".card")].find(
-            (c) => c.querySelector(".card-name")?.textContent?.trim() === "SERVICE 1",
+            (c) => c.querySelector(".card-name")?.textContent?.trim() === "SERVICE 2",
           )!;
           (card.querySelector(".vote") as HTMLButtonElement).click();
         });
@@ -241,7 +264,7 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
       await vote();
       await page.waitForFunction(() => {
         const card = [...document.querySelectorAll(".card")].find(
-          (c) => c.querySelector(".card-name")?.textContent?.trim() === "SERVICE 1",
+          (c) => c.querySelector(".card-name")?.textContent?.trim() === "SERVICE 2",
         );
         return card?.querySelector(".legend-state")?.textContent?.trim() === "DOWN";
       }, null, { timeout: 8000 });
@@ -253,14 +276,14 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
       assert.match(after.fx!, /^0%\s+\(0 fixes\)$/, after.fx);
       assert.equal(after.breakWidth, "100%");
       assert.equal(after.spark, "0%", "the spark rides the boundary");
-      assert.equal(stubs[1].hits.length, 1, "the flip calls the service exactly once");
-      assert.deepEqual(stubs[1].hits, ["off"]);
+      assert.equal(stubs[2].hits.length, 1, "the flip calls the service exactly once");
+      assert.deepEqual(stubs[2].hits, ["off"]);
 
       // A second break moves nothing further and must not call again.
       await page.waitForTimeout(300);
       await vote();
       await page.waitForTimeout(900);
-      assert.equal(stubs[1].hits.length, 1, "piling on must stay silent");
+      assert.equal(stubs[2].hits.length, 1, "piling on must stay silent");
 
       await page.context().close();
     });
