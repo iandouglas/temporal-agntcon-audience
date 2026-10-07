@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import {
   adminState, chaosState, connect, connectControl, hello, lastStats, lastTallies, sawArmed,
-  sawState, sleep, startReplica, startRedis, startStub, waitFor,
+  sawState, sleep, startAdminStub, startReplica, startRedis, startStub, waitFor,
   type Client, type Replica, type RedisHandle, type Stub,
 } from "./helpers";
 
@@ -767,5 +767,78 @@ describe("what the stage screen and the agent worker read", () => {
   it("leaks nothing but percentages", async () => {
     const chaos = (await chaosState(a.base)) as unknown as Record<string, unknown>;
     assert.deepEqual(Object.keys(chaos).sort(), ["armed", "ok", "state"]);
+  });
+});
+
+/*
+ * The MCP card used to tally and call nothing: the board POSTed /on, the MCP
+ * server only ever served /admin/control, and the 404 was invisible because a
+ * tap moves the bar whether or not the dispatch lands. The room could break
+ * the agent's link to the MCP server all it liked and nothing happened.
+ */
+describe("breaking the link to the MCP server", () => {
+  const PORT = 4931;
+  const MCP_ADMIN_PORT = 4932;
+  const MCP_TOKEN = "mcp-admin-token";
+  let mcp: Awaited<ReturnType<typeof startAdminStub>>;
+  let apis: Stub[];
+  let replica: Replica;
+  let control: Client;
+
+  before(async () => {
+    mcp = await startAdminStub(MCP_ADMIN_PORT, MCP_TOKEN, true);
+    apis = [
+      await startStub(4933, "bool", true), await startStub(4934, "bool", true),
+      await startStub(4935, "bool", true), await startStub(4936, "bool", true),
+    ];
+    replica = await startReplica({
+      port: PORT,
+      stubPorts: { mcp: MCP_ADMIN_PORT, services: apis.map((s) => s.port) },
+      adminToken: TOKEN,
+      extraEnv: { mcp_admin_token: MCP_TOKEN },
+    });
+    control = await connectControl(replica.base, TOKEN);
+    await sleep(300);
+    control.send(JSON.stringify({ t: "arm", v: true }));
+    await sleep(300);
+  });
+
+  after(async () => {
+    control.close();
+    await replica.stop();
+    await mcp.close();
+    // Every stub, or node --test never exits: the open listeners keep the
+    // event loop alive long after the last assertion has passed.
+    for (const stub of apis) await stub.close();
+  });
+
+  it("seeds from /admin/state rather than /healthz", async () => {
+    // /healthz reports tool names and deliberately never the switch positions,
+    // so it cannot answer this question at all.
+    assert.equal((await adminState(replica.base, TOKEN)).state.mcp.up, true);
+  });
+
+  it("speaks /admin/control, with the bearer, when the room flips it", async () => {
+    mcp.controls.length = 0;
+    control.send(JSON.stringify({ t: "force", id: "mcp", v: false }));
+
+    await waitFor("the MCP server was told to go down", () => mcp.controls.length > 0,
+      { detail: () => JSON.stringify(mcp.controls) });
+
+    assert.deepEqual(mcp.controls[0], { target: "global", enabled: false, authorized: true });
+    assert.equal(mcp.on, false, "the master switch actually moved");
+  });
+
+  it("turns it back on the same way", async () => {
+    mcp.controls.length = 0;
+    control.send(JSON.stringify({ t: "force", id: "mcp", v: true }));
+    await waitFor("the MCP server was told to come back", () => mcp.controls.length > 0);
+    assert.deepEqual(mcp.controls[0], { target: "global", enabled: true, authorized: true });
+    assert.equal(mcp.on, true);
+  });
+
+  it("never falls back to the dialect the MCP server does not serve", () => {
+    assert.deepEqual(mcp.wrongDialect, [],
+      `the board asked for paths the MCP server does not serve: ${mcp.wrongDialect.join(", ")}`);
   });
 });
