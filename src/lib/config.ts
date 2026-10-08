@@ -62,11 +62,23 @@ export function getServices(): ServiceConfig[] {
     });
   }
 
+  /*
+   * The MCP server does not speak /on and /off. Its control plane is
+   * POST /admin/control {"target":"global","enabled":bool}, behind an admin
+   * bearer, on its INTERNAL listener only -- deliberately, so that a leaked
+   * token alone cannot reach the chaos levers from the conference floor.
+   *
+   * So `mcp_url` points at that internal listener (`:8081`, no public domain)
+   * and `mcp_admin_token` carries the token. With no token set we fall back to
+   * the /on + /off dialect, which is what `dev/mcp-switch-shim.mjs` serves
+   * locally.
+   */
   services.push({
     id: "mcp",
     name: env("mcp_name") ?? "AGENT ↔ MCP SERVER",
     kind: "mcp",
     baseUrl: normalizeBase(env("mcp_url")),
+    adminToken: env("mcp_admin_token"),
   });
 
   const highest = Math.max(4, highestConfiguredApiIndex());

@@ -14,6 +14,13 @@ export interface ServiceConfig {
   kind: ToggleKind;
   /** Base URL with any trailing slash stripped. Undefined when the env var is missing. */
   baseUrl?: string;
+  /**
+   * Bearer token for a service that does not speak the plain /on + /off
+   * dialect. Only the MCP server, whose control plane is deliberately gated on
+   * both this token *and* arriving at its internal listener. MUST NOT be sent
+   * to the browser.
+   */
+  adminToken?: string;
 }
 
 /** The subset of a service that is safe to render in the browser. */
