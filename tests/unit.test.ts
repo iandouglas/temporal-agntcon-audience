@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, beforeEach, describe, it } from "node:test";
-import { parseHealth } from "../src/lib/dispatch";
+import { parseAdminState, parseHealth } from "../src/lib/dispatch";
 import { TokenBucket } from "../src/lib/ratelimit";
 import {
   getPublicServices,
@@ -171,13 +171,17 @@ describe("config", () => {
   it("never exposes a base URL to the browser", () => {
     process.env.mcp_url = "http://secret.internal:9000";
     process.env.service_1_url = "http://also-secret.internal:9000";
+    process.env.mcp_admin_token = "secret-admin-token";
     resetConfigCache();
     const published = JSON.stringify(getPublicServices());
     assert.ok(!published.includes("secret"), published);
     assert.ok(!published.includes("baseUrl"), published);
+    assert.ok(!published.includes("adminToken"), published);
     for (const service of toPublic(getServices())) {
       assert.deepEqual(Object.keys(service).sort(), ["id", "kind", "name"]);
     }
+    delete process.env.mcp_admin_token;
+    resetConfigCache();
   });
 
   describe("validateServices", () => {
@@ -260,5 +264,44 @@ describe("in-process bus fallback", () => {
     await bus.releaseSeedLock();
     assert.equal(await bus.acquireSeedLock(30), true);
     await bus.close();
+  });
+});
+
+/*
+ * The MCP server speaks its own control dialect, on purpose: its chaos levers
+ * are gated on an admin bearer AND on arriving at the internal listener, so
+ * that a leaked token alone cannot reach them from the conference floor. The
+ * board is the one caller that has to know about that.
+ */
+describe("the MCP server's control dialect", () => {
+  it("reads the master switch out of /admin/state", () => {
+    assert.equal(parseAdminState('{"global":true,"services":[]}'), true);
+    assert.equal(parseAdminState('{"global":false,"services":[]}'), false);
+  });
+
+  it("does not guess when the shape is not what we expect", () => {
+    // Better a cold start that falls back than one that seeds every switch
+    // from a payload we misread.
+    assert.equal(parseAdminState('{"services":[]}'), null);
+    assert.equal(parseAdminState('{"global":"yes"}'), null);
+    assert.equal(parseAdminState("not json"), null);
+  });
+
+  it("keeps `global` out of the generic health parser", () => {
+    // `global` is a word plenty of unrelated payloads carry. Widening the
+    // shared parser to catch it here would make it guess wrong elsewhere.
+    assert.equal(parseHealth('{"global":false}'), null);
+  });
+
+  it("carries the token only when one is configured", () => {
+    process.env.mcp_url = "http://mcp.internal:8081";
+    process.env.mcp_admin_token = "tok";
+    resetConfigCache();
+    assert.equal(getServices().find((s) => s.id === "mcp")?.adminToken, "tok");
+
+    delete process.env.mcp_admin_token;
+    resetConfigCache();
+    // No token means the /on + /off dialect, which is what the dev shim serves.
+    assert.equal(getServices().find((s) => s.id === "mcp")?.adminToken, undefined);
   });
 });

@@ -67,6 +67,79 @@ export async function startStub(port: number, shape: HealthShape, initial: boole
   };
 }
 
+/**
+ * A stand-in for the MCP server's internal listener.
+ *
+ * Speaks only `/admin/state` and `/admin/control`, both behind a bearer, and
+ * 404s everything else -- including `/on` and `/off`. That is the point: if
+ * the board ever reverts to the plain dialect, the 404 shows up as a failed
+ * dispatch rather than as a switch that silently does nothing.
+ */
+export interface AdminStub {
+  port: number;
+  /** Every /admin/control this stub received, in order. */
+  controls: Array<{ target: string; enabled: boolean; authorized: boolean }>;
+  /** Paths it was asked for that it does not serve. */
+  wrongDialect: string[];
+  get on(): boolean;
+  close(): Promise<void>;
+}
+
+export async function startAdminStub(
+  port: number,
+  token: string,
+  initial = true,
+): Promise<AdminStub> {
+  let on = initial;
+  const controls: AdminStub["controls"] = [];
+  const wrongDialect: string[] = [];
+
+  const state = () => JSON.stringify({ global: on, services: [] });
+  const server: Server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://x");
+    const authorized = req.headers.authorization === `Bearer ${token}`;
+
+    if (url.pathname === "/admin/state" && req.method === "GET") {
+      if (!authorized) { res.writeHead(401).end('{"error":"unauthorized"}'); return; }
+      res.writeHead(200, { "content-type": "application/json" }).end(state());
+      return;
+    }
+    if (url.pathname === "/admin/control" && req.method === "POST") {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        if (!authorized) {
+          controls.push({ target: "", enabled: false, authorized: false });
+          res.writeHead(401).end('{"error":"unauthorized"}');
+          return;
+        }
+        const parsed = JSON.parse(body || "{}") as { target?: string; enabled?: boolean };
+        controls.push({
+          target: String(parsed.target),
+          enabled: Boolean(parsed.enabled),
+          authorized: true,
+        });
+        on = Boolean(parsed.enabled);
+        res.writeHead(200, { "content-type": "application/json" }).end(state());
+      });
+      return;
+    }
+    wrongDialect.push(url.pathname);
+    res.writeHead(404).end();
+  });
+
+  server.listen(port, "127.0.0.1");
+  await once(server, "listening");
+
+  return {
+    port,
+    controls,
+    wrongDialect,
+    get on() { return on; },
+    async close() { server.close(); await once(server, "close"); },
+  };
+}
+
 export interface RedisHandle {
   port: number;
   url: string;

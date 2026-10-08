@@ -80,9 +80,18 @@ export function poolStats(): { inFlight: number; queued: number } {
 }
 
 /**
- * POST `{baseUrl}/on` or `{baseUrl}/off`. Empty body, no auth, no retry --
- * one tap, one call. Returns null if the service has no URL configured or the
- * request was shed under load.
+ * Flip one service, in whichever dialect it speaks.
+ *
+ * The four Go services take `POST {baseUrl}/on` and `/off` with an empty body
+ * and no auth -- one tap, one call, no retry. The MCP server does not: its
+ * control plane is `POST /admin/control {"target":"global","enabled":bool}`
+ * behind an admin bearer on its internal listener, and that asymmetry is
+ * deliberate on its side rather than an oversight. Teaching this one caller a
+ * second dialect is cheaper than giving the MCP server an unauthenticated
+ * route that does the same thing.
+ *
+ * Returns null if the service has no URL configured or the request was shed
+ * under load.
  */
 export async function dispatchToggle(
   service: ServiceConfig,
@@ -90,6 +99,9 @@ export async function dispatchToggle(
 ): Promise<DispatchResult | null> {
   const path = value ? "on" : "off";
   if (!service.baseUrl) return null;
+  if (service.kind === "mcp" && service.adminToken) {
+    return dispatchAdminControl(service, value, service.adminToken);
+  }
 
   const url = `${service.baseUrl}/${path}`;
   return pool.run(async () => {
@@ -116,6 +128,61 @@ export async function dispatchToggle(
       return {
         id: service.id,
         path,
+        ok: false,
+        status: null,
+        ms: Date.now() - started,
+        error: err instanceof Error ? err.message : String(err),
+        at: Date.now(),
+      } satisfies DispatchResult;
+    }
+  });
+}
+
+/** Read the master switch out of the MCP server's `/admin/state`. */
+export function parseAdminState(raw: string): boolean | null {
+  try {
+    const body = JSON.parse(raw) as unknown;
+    if (body && typeof body === "object" && typeof (body as { global?: unknown }).global === "boolean") {
+      return (body as { global: boolean }).global;
+    }
+  } catch {
+    /* fall through */
+  }
+  return null;
+}
+
+/** The MCP server's dialect. Same shape of result, so callers do not branch. */
+async function dispatchAdminControl(
+  service: ServiceConfig,
+  value: boolean,
+  token: string,
+): Promise<DispatchResult | null> {
+  const url = `${service.baseUrl}/admin/control`;
+  const body = JSON.stringify({ target: "global", enabled: value });
+  return pool.run(async () => {
+    const started = Date.now();
+    try {
+      const res = await request(url, {
+        method: "POST",
+        dispatcher: agent,
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body,
+        headersTimeout: POST_TIMEOUT_MS,
+        bodyTimeout: POST_TIMEOUT_MS,
+      });
+      await res.body.dump();
+      return {
+        id: service.id,
+        path: value ? "on" : "off",
+        ok: res.statusCode >= 200 && res.statusCode < 300,
+        status: res.statusCode,
+        ms: Date.now() - started,
+        at: Date.now(),
+      } satisfies DispatchResult;
+    } catch (err) {
+      return {
+        id: service.id,
+        path: value ? "on" : "off",
         ok: false,
         status: null,
         ms: Date.now() - started,
@@ -184,12 +251,21 @@ function coerceScalar(text: string): boolean | null {
 /** GET `{baseUrl}/health`. Returns null on any failure, so the caller can fall back. */
 export async function probeHealth(service: ServiceConfig): Promise<boolean | null> {
   if (!service.baseUrl) return null;
-  const url = `${service.baseUrl}/health`;
+  /*
+   * The MCP server's /healthz reports tool names and deliberately never the
+   * switch positions, so that a public caller cannot read them. Its state
+   * lives behind the admin bearer instead.
+   */
+  const admin = service.kind === "mcp" && service.adminToken;
+  const url = `${service.baseUrl}/${admin ? "admin/state" : "health"}`;
   try {
     const res = await request(url, {
       method: "GET",
       dispatcher: agent,
-      headers: { accept: "application/json, text/plain;q=0.9, */*;q=0.8" },
+      headers: {
+        accept: "application/json, text/plain;q=0.9, */*;q=0.8",
+        ...(admin ? { authorization: `Bearer ${service.adminToken}` } : {}),
+      },
       headersTimeout: HEALTH_TIMEOUT_MS,
       bodyTimeout: HEALTH_TIMEOUT_MS,
     });
@@ -198,6 +274,13 @@ export async function probeHealth(service: ServiceConfig): Promise<boolean | nul
       console.warn(`[health] ${service.id} ${url} -> HTTP ${res.statusCode}`);
       return null;
     }
+    /*
+     * /admin/state answers `{"global": bool, "services": [...]}`. `global` is
+     * not one of the generic state keys and should not become one -- it is a
+     * word plenty of unrelated payloads could carry, and widening the shared
+     * parser to catch it here would make it guess wrong somewhere else.
+     */
+    if (admin) return parseAdminState(text);
     return parseHealth(text);
   } catch (err) {
     console.warn(`[health] ${service.id} ${url} -> ${err instanceof Error ? err.message : String(err)}`);
