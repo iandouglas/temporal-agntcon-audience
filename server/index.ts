@@ -132,6 +132,28 @@ async function route(
     return;
   }
 
+  /*
+   * The chaos feed: how the agent worker learns the room has voted it down.
+   *
+   * Unauthenticated on purpose. Both readers -- the watchdog in
+   * `richards_agent/worker.py` and the supervisor loop in
+   * `scripts/run_worker.sh` -- send no Authorization header, so an admin-gated
+   * feed would simply never be read. It exposes percentages and nothing else:
+   * no names, no tokens, no way to change anything.
+   *
+   * The values are plain numbers rather than the `{ up, percent }` objects
+   * `/api/admin/state` returns, because `run_worker.sh` parses this with an
+   * inline `python3 -c` that exits non-zero on an object -- which its caller
+   * reads as "feed unreachable, start anyway", silently disabling the gate
+   * that makes fixing the worker mean something.
+   */
+  if (pathname === "/chaos") {
+    const state: Record<string, number> = {};
+    for (const [id, value] of Object.entries(hub.health())) state[id] = value.percent;
+    json(res, 200, { ok: true, armed: hub.isArmed(), state });
+    return;
+  }
+
   if (pathname.startsWith("/api/admin/")) {
     await admin(req, res, hub, pathname);
     return;
@@ -164,8 +186,10 @@ async function admin(
   }
 
   if (pathname === "/api/admin/reseed" && req.method === "POST") {
-    const state = await hub.reseed();
-    json(res, 200, { ok: true, state });
+    await hub.reseed();
+    // Same `{ up, percent }` shape as /api/admin/state: one admin API that
+    // answers two ways about the same switches is a trap worth not setting.
+    json(res, 200, { ok: true, state: hub.health() });
     return;
   }
 
@@ -191,7 +215,11 @@ async function admin(
       armed: hub.isArmed(),
       names: hub.getNames(),
       bus: hub.busStatus(),
-      state: hub.getState(),
+      // `{ up, percent }` rather than a bare boolean: the stage screen draws a
+      // tug-of-war bar from the percentage and a state pill from `up`. See
+      // Hub.health() for why the two can never disagree.
+      state: hub.health(),
+      taps: hub.getTaps(),
       pool: poolStats(),
       services: hub.services.map((s) => ({ id: s.id, name: s.name, kind: s.kind, configured: Boolean(s.baseUrl) })),
     });

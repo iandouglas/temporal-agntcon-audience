@@ -107,10 +107,18 @@ body {
   color: rgba(243, 231, 216, 0.5);
 }
 
+/*
+ * The worker and the MCP link. Stacked in portrait: side by side on a 390px
+ * phone each card is ~190px wide, which wraps the bar legend onto two lines
+ * ("50% (0" / "fixes)") and crowds the state pill. Two cards of one unit each
+ * costs the same height as one card of two and stays readable.
+ */
 .tier-mcp {
-  flex: 1 1 0;
+  flex: 2 1 0;
   min-height: 0;
   display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 1.2dvh, 12px);
 }
 
 .divider {
@@ -134,8 +142,10 @@ body {
     grid-template-columns: 1fr 1fr;
     grid-auto-rows: 1fr;
   }
+  /* Room to breathe: back to a row, level with the 2x2 grid below. */
   .tier-mcp {
     flex: 1 1 0;
+    flex-direction: row;
   }
   .grid {
     flex: 2 1 0;
@@ -238,6 +248,16 @@ body {
 .card--mcp {
   border-color: rgba(232, 163, 61, 0.28);
   background: linear-gradient(180deg, rgba(232, 163, 61, 0.09), rgba(255, 255, 255, 0.02));
+}
+
+/*
+ * The only switch that kills a real process rather than flipping a flag, so
+ * it is tinted apart from the rest -- the room should be able to tell that
+ * this one is different without being told.
+ */
+.card--worker {
+  border-color: rgba(141, 168, 255, 0.3);
+  background: linear-gradient(180deg, rgba(141, 168, 255, 0.1), rgba(255, 255, 255, 0.02));
 }
 
 .card-name {

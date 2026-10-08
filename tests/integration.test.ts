@@ -9,8 +9,8 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import {
-  adminState, connect, connectControl, hello, lastStats, lastTallies, sawArmed, sawState,
-  sleep, startReplica, startRedis, startStub, waitFor,
+  adminState, chaosState, connect, connectControl, hello, lastStats, lastTallies, sawArmed,
+  sawState, sleep, startReplica, startRedis, startStub, waitFor,
   type Client, type Replica, type RedisHandle, type Stub,
 } from "./helpers";
 
@@ -51,12 +51,14 @@ after(async () => {
 describe("boot", () => {
   it("seeds from /health, reading every response shape correctly", async () => {
     const { state } = await adminState(a.base, TOKEN);
-    assert.deepEqual(state, {
-      mcp: true,        // "true"
-      service_1: false, // {"on":false}
-      service_2: true,  // "ON"
-      service_3: false, // {"state":"disabled"}
-      service_4: false, // "false"
+    const up = Object.fromEntries(Object.entries(state).map(([id, v]) => [id, v.up]));
+    assert.deepEqual(up, {
+      agent_worker: true, // no /health to probe; an unvoted switch is up
+      mcp: true,          // "true"
+      service_1: false,   // {"on":false}
+      service_2: true,    // "ON"
+      service_3: false,   // {"state":"disabled"}
+      service_4: false,   // "false"
     });
   });
 
@@ -380,12 +382,12 @@ describe("operator counters", () => {
     // The tally is the board's truth, so a reset to 0-0 -- a tie, which reads
     // as up -- must not leave a service sitting down behind a 50% bar.
     control.send(JSON.stringify({ t: "force", id: "service_3", v: false }));
-    await waitFor("service_3 down", async () => (await adminState(a.base, TOKEN)).state.service_3 === false);
+    await waitFor("service_3 down", async () => (await adminState(a.base, TOKEN)).state.service_3.up === false);
 
     control.send(JSON.stringify({ t: "reset-counters" }));
     await waitFor(
       "reset drove it back up",
-      async () => (await adminState(a.base, TOKEN)).state.service_3 === true,
+      async () => (await adminState(a.base, TOKEN)).state.service_3.up === true,
     );
     // The board's state flips synchronously while the POST is fire-and-forget,
     // so reality lags it by a beat. Wait for the service itself rather than
@@ -444,11 +446,11 @@ describe("reseed", () => {
     const res = await fetch(`${a.base}/api/admin/reseed`, {
       method: "POST", headers: { authorization: `Bearer ${TOKEN}` },
     });
-    const body = (await res.json()) as { ok: boolean; state: Record<string, boolean> };
+    const body = (await res.json()) as { ok: boolean; state: Record<string, { up: boolean; percent: number }> };
     assert.equal(body.ok, true);
-    assert.equal(body.state.service_1, true);
-    assert.equal(body.state.service_2, false);
-    assert.equal(body.state.service_3, true);
+    assert.equal(body.state.service_1.up, true);
+    assert.equal(body.state.service_2.up, false);
+    assert.equal(body.state.service_3.up, true);
     assert.equal(stubs.service_1.calls, callsBefore, "reseed must not drive the services");
     control.close();
   });
@@ -660,5 +662,110 @@ describe("renaming a service without a redeploy", () => {
     assert.equal(names.service_1, "Order Churro", "Redis must win over service_1_name");
     assert.equal(names.service_3, "SERVICE 3", "a name never set still comes from the env var");
     after.close();
+  });
+});
+
+/*
+ * Melissa's stage screen and her agent worker are the only consumers of these
+ * two payloads, and neither of them lives in this repo. If the shapes drift,
+ * nothing here fails -- her projector just quietly shows zeroes and the room
+ * loses the ability to kill the worker. So the shapes get asserted here.
+ */
+describe("what the stage screen and the agent worker read", () => {
+  let control: Client;
+
+  before(async () => {
+    control = await connectControl(a.base, TOKEN);
+    await sleep(200);
+    control.send(JSON.stringify({ t: "arm", v: true }));
+    control.send(JSON.stringify({ t: "reset-counters" }));
+    await sleep(600);
+  });
+
+  after(() => control.close());
+
+  it("carries an agent_worker switch the room can vote on", async () => {
+    const body = await adminState(a.base, TOKEN);
+    const worker = body.services.find((s) => s.id === "agent_worker");
+    assert.ok(worker, "the board must expose an agent_worker switch");
+    assert.equal(worker.kind, "worker");
+    // Nothing to POST to: the worker reads /chaos and exits on its own.
+    assert.equal(worker.configured, false);
+    assert.ok("agent_worker" in body.state);
+  });
+
+  it("reports every switch as { up, percent }", async () => {
+    const body = await adminState(a.base, TOKEN);
+    for (const [id, value] of Object.entries(body.state)) {
+      assert.equal(typeof value.up, "boolean", `${id}.up`);
+      assert.equal(typeof value.percent, "number", `${id}.percent`);
+      assert.ok(value.percent >= 0 && value.percent <= 100, `${id}.percent in range`);
+    }
+  });
+
+  it("starts every switch at a 50/50 tie, which reads as up", async () => {
+    const body = await adminState(a.base, TOKEN);
+    assert.deepEqual(body.state.agent_worker, { up: true, percent: 50 });
+  });
+
+  it("reports taps, which the projector renders per card", async () => {
+    const before = (await adminState(a.base, TOKEN)).taps.agent_worker ?? 0;
+    const breaker = await connect(a.base, "", "breaker");
+    await sleep(200);
+    breaker.send(JSON.stringify({ t: "vote", id: "agent_worker" }));
+    await waitFor("tap counted", async () =>
+      ((await adminState(a.base, TOKEN)).taps.agent_worker ?? 0) > before);
+    breaker.close();
+  });
+
+  it("moves the percentage as the room votes", async () => {
+    const breaker = await connect(a.base, "", "breaker");
+    await sleep(200);
+    // Two breaks against nothing: 0% fixers, and the switch goes down.
+    breaker.send(JSON.stringify({ t: "vote", id: "agent_worker" }));
+    breaker.send(JSON.stringify({ t: "vote", id: "agent_worker" }));
+    await waitFor("agent_worker voted down", async () => {
+      const v = (await adminState(a.base, TOKEN)).state.agent_worker;
+      return v.up === false && v.percent < 50;
+    });
+    breaker.close();
+  });
+
+  it("never lets up and percent disagree about the threshold", async () => {
+    // The watchdog compares percent against 50 and ignores up; the stage
+    // screen trusts up and ignores percent. A boundary rounding that put
+    // them on opposite sides would make the worker immortal.
+    const body = await adminState(a.base, TOKEN);
+    for (const [id, value] of Object.entries(body.state)) {
+      assert.equal(value.up, value.percent >= 50, `${id}: up=${value.up} percent=${value.percent}`);
+    }
+  });
+
+  it("serves /chaos without a token, because the watchdog sends none", async () => {
+    const res = await fetch(`${a.base}/chaos`);
+    assert.equal(res.status, 200);
+  });
+
+  it("gives /chaos plain numbers, which run_worker.sh can parse", async () => {
+    const chaos = await chaosState(a.base);
+    assert.ok("agent_worker" in chaos.state);
+    for (const [id, value] of Object.entries(chaos.state)) {
+      // An object here makes run_worker.sh's inline python exit non-zero,
+      // which its caller reads as "feed unreachable, start anyway" -- and the
+      // fixers stop mattering.
+      assert.equal(typeof value, "number", `${id} must be a number, got ${typeof value}`);
+    }
+  });
+
+  it("agrees with /api/admin/state about every switch", async () => {
+    const [chaos, admin] = await Promise.all([chaosState(a.base), adminState(a.base, TOKEN)]);
+    for (const [id, value] of Object.entries(admin.state)) {
+      assert.equal(chaos.state[id], value.percent, `${id} differs between the two feeds`);
+    }
+  });
+
+  it("leaks nothing but percentages", async () => {
+    const chaos = (await chaosState(a.base)) as unknown as Record<string, unknown>;
+    assert.deepEqual(Object.keys(chaos).sort(), ["armed", "ok", "state"]);
   });
 });

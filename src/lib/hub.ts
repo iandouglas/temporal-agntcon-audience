@@ -8,6 +8,7 @@ import type {
   BusEvent,
   BusStatus,
   DispatchResult,
+  HealthMap,
   Role,
   Tally,
   TallyMap,
@@ -154,7 +155,15 @@ export class Hub {
 
   async start(): Promise<void> {
     for (const service of this.services) {
-      this.state[service.id] = false;
+      /*
+       * Up, not down. A switch nobody has voted on is a 0-0 tie, and a tie
+       * reads as up everywhere else in this file. Starting at false meant any
+       * service whose /health could not be probed at boot seeded DOWN while
+       * its tally said UP -- invisible while every URL was configured, and
+       * guaranteed for `agent_worker`, which has no URL by design and would
+       * have had its worker killed by the watchdog the moment it started.
+       */
+      this.state[service.id] = true;
       this.taps[service.id] = 0;
       this.lastDispatch[service.id] = null;
       this.tallies[service.id] = { breaks: 0, fixes: 0, on: true };
@@ -163,7 +172,9 @@ export class Hub {
     const problems = validateServices(this.services);
     for (const problem of problems) console.warn(`[config] ${problem}`);
     if (problems.length === 0) {
-      console.log(`[config] all ${this.services.length} service URLs look well-formed`);
+      // Only the ones that actually have a URL; the worker is not one of them.
+      const withUrls = this.services.filter((service) => service.kind !== "worker").length;
+      console.log(`[config] all ${withUrls} service URLs look well-formed`);
     }
 
     this.bus = await createBus(redisUrl());
@@ -188,6 +199,18 @@ export class Hub {
    * discard the crowd's work. Only a genuinely cold start seeds from /health.
    */
   private async seed(): Promise<void> {
+    await this.seedState();
+    /*
+     * Always, on every path. This used to be defined and never called, so a
+     * replica could boot with `state.service_3 = false` and a 0-0 tally that
+     * derives UP. Invisible while the admin payload reported only a boolean;
+     * the moment it also reports a percentage, that replica serves a card
+     * reading DOWN above a bar sitting at the tipping point.
+     */
+    this.syncTalliesToState();
+  }
+
+  private async seedState(): Promise<void> {
     await this.seedArmed();
     await this.seedNames();
     await this.seedVotes();
@@ -331,12 +354,42 @@ export class Hub {
     await this.bus.clearState().catch(() => undefined);
     await this.bus.releaseSeedLock().catch(() => undefined);
     const probed = await probeAll(this.services);
-    for (const service of this.services) this.state[service.id] = probed[service.id] ?? false;
+    // `?? true` to match the seed path: a switch with no readable /health is
+    // an unvoted one, and an unvoted switch is up.
+    for (const service of this.services) this.state[service.id] = probed[service.id] ?? true;
+    this.syncTalliesToState();
     await this.replicate({ t: "full", state: { ...this.state }, ts: Date.now() }, async () => {
       await this.bus.putState(this.state);
     });
     console.log("[reseed] re-seeded from /health:", this.state);
     return { ...this.state };
+  }
+
+  /**
+   * Nudge one tally to the smallest arrangement that derives `value`.
+   *
+   * Keeps the vote totals meaningful instead of wiping them: a tie reads as
+   * up, one break ahead reads as down. Called wherever state moves for a
+   * reason the tally does not already explain -- an operator force, or a peer
+   * replica's state arriving over the bus. A no-op when the tally already
+   * derives the value, which is the common case.
+   */
+  private deriveTallyFrom(id: string, value: boolean): void {
+    const t = this.tallies[id] ?? { breaks: 0, fixes: 0, on: value };
+    if (value) t.fixes = Math.max(t.fixes, t.breaks);
+    else t.breaks = Math.max(t.breaks, t.fixes + 1);
+    t.on = value;
+    this.tallies[id] = t;
+    /*
+     * Write it behind, because only `flushVotes` does and only for tallies
+     * the audience moved. A tally nudged by an operator force lived in this
+     * process alone, so a restart recovered the stale counts from Redis and
+     * the bar jumped somewhere else while the card stayed where the operator
+     * put it. Fire-and-forget: Redis is a copy here, not the source.
+     */
+    void this.bus
+      ?.putVotes({ [`${id}:breaks`]: String(t.breaks), [`${id}:fixes`]: String(t.fixes) })
+      .catch(() => undefined);
   }
 
   /** Align the opening tallies with whatever state we seeded from. */
@@ -356,7 +409,9 @@ export class Hub {
 
   private mergeState(incoming: StateMap): void {
     for (const service of this.services) {
-      this.state[service.id] = incoming[service.id] ?? this.state[service.id] ?? false;
+      // `?? true` for the same reason the initial state is true: an unknown
+      // switch is an unvoted one, and that is a tie, which is up.
+      this.state[service.id] = incoming[service.id] ?? this.state[service.id] ?? true;
     }
   }
 
@@ -480,6 +535,41 @@ export class Hub {
     return { ...this.state };
   }
 
+  /** Tap counts per service, for the operator panel and the stage screen. */
+  getTaps(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const service of this.services) out[service.id] = this.taps[service.id] ?? 0;
+    return out;
+  }
+
+  /**
+   * Every switch as `{ up, percent }` -- the fixers' share of the vote.
+   *
+   * The two consumers read different halves of this and neither is wrong:
+   * the stage screen trusts `up`, the agent worker's watchdog compares
+   * `percent` against 50 and never looks at `up`. So the two must agree, and
+   * naively rounding the share does not guarantee that -- 499 fixes against
+   * 500 breaks is 49.95%, which rounds to 50 and reads as UP while `isOn`
+   * says DOWN. Clamping to the side `on` is already on costs one percentage
+   * point of precision at the boundary and removes the disagreement.
+   *
+   * A 0-0 tie is 50: nobody has voted, the service is up, and the bar starts
+   * in the middle.
+   */
+  health(): HealthMap {
+    const out: HealthMap = {};
+    for (const service of this.services) {
+      const t = this.tallies[service.id] ?? { breaks: 0, fixes: 0, on: true };
+      const total = t.breaks + t.fixes;
+      const up = this.state[service.id] ?? t.on;
+      let percent = total === 0 ? 50 : Math.round((100 * t.fixes) / total);
+      if (up && percent < 50) percent = 50;
+      if (!up && percent > 49) percent = 49;
+      out[service.id] = { up, percent };
+    }
+    return out;
+  }
+
   /**
    * Handle a tap.
    *
@@ -512,11 +602,7 @@ export class Hub {
      * of wiping them: a tie reads as up, one break ahead reads as down.
      */
     if (options.operator) {
-      const t = this.tallies[id] ?? { breaks: 0, fixes: 0, on: value };
-      if (value) t.fixes = Math.max(t.fixes, t.breaks);
-      else t.breaks = Math.max(t.breaks, t.fixes + 1);
-      t.on = value;
-      this.tallies[id] = t;
+      this.deriveTallyFrom(id, value);
       this.broadcast({ t: "tallies", tallies: this.getTallies(), ts: Date.now() });
     }
 
@@ -536,7 +622,15 @@ export class Hub {
     switch (event.t) {
       case "state":
         this.state[event.id] = event.v;
+        /*
+         * ...and keep the tally able to explain it. Without this a state
+         * change that reached us over the bus left the bar where it was: a
+         * card reading DOWN above a bar at the tipping point, and a stage
+         * screen told the switch is 50% when the room has it broken.
+         */
+        this.deriveTallyFrom(event.id, event.v);
         this.broadcast({ t: "state", id: event.id, v: event.v, ts: event.ts });
+        this.broadcast({ t: "tallies", tallies: this.getTallies(), ts: event.ts });
         break;
       case "armed":
         this.armed = event.v;

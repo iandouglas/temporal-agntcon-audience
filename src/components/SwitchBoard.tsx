@@ -26,7 +26,13 @@ export function SwitchBoard({ services, title, subtitle }: Props) {
   /* Drives the glow: only the pre-demo wait pulses. */
   const statusState = !connected ? "down" : !ready ? "syncing" : armed ? "live" : "waiting";
 
-  const mcp = services.filter((service) => service.kind === "mcp");
+  /*
+   * The top tier is the agent's own plumbing -- its worker process and its
+   * link to the MCP server -- and the grid below is the four APIs behind it.
+   * Filtering for "mcp" alone used to be the same thing; now that the worker
+   * exists, a kind missing from both lists renders nowhere at all.
+   */
+  const path = services.filter((service) => service.kind === "worker" || service.kind === "mcp");
   const apis = services.filter((service) => service.kind === "api");
 
   return (
@@ -46,7 +52,7 @@ export function SwitchBoard({ services, title, subtitle }: Props) {
       </header>
 
       <section className="tier-mcp">
-        {mcp.map((service) => (
+        {path.map((service) => (
           <ServiceCard
             key={service.id}
             service={{ ...service, name: names[service.id] ?? service.name }}
