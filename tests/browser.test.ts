@@ -212,14 +212,14 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
       const up = ["AGENT WORKER", "AGENT MCP", "SERVICE 2"];
       for (const bar of bars) {
         if (up.includes(bar.name!)) {
-          // Untouched and healthy: "50% (0 fixes)" / "(0 breaks) 50%".
-          assert.match(bar.fx!, /^50%\s+\(0 fixes\)$/, `${bar.name}: ${bar.fx}`);
-          assert.match(bar.br!, /^\(0 breaks\)\s+50%$/, `${bar.name}: ${bar.br}`);
+          // Untouched and healthy: "50% (0 breaks)" / "(0 fixes) 50%".
+          assert.match(bar.br!, /^50%\s+\(0 breaks\)$/, `${bar.name}: ${bar.br}`);
+          assert.match(bar.fx!, /^\(0 fixes\)\s+50%$/, `${bar.name}: ${bar.fx}`);
           assert.equal(bar.state, "UP", bar.name);
         } else {
           // Seeded down from /health, so the bar has to say so too.
           assert.equal(bar.state, "DOWN", bar.name);
-          assert.match(bar.fx!, /^0%\s+\(0 fixes\)$/, `${bar.name}: ${bar.fx}`);
+          assert.match(bar.fx!, /^\(0 fixes\)\s+0%$/, `${bar.name}: ${bar.fx}`);
         }
       }
       await page.context().close();
@@ -255,8 +255,8 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
         });
 
       const tied = await readTaco();
-      assert.match(tied.fx!, /^50%\s+\(0 fixes\)$/);
-      assert.match(tied.br!, /^\(0 breaks\)\s+50%$/);
+      assert.match(tied.fx!, /^\(0 fixes\)\s+50%$/);
+      assert.match(tied.br!, /^50%\s+\(0 breaks\)$/);
       assert.equal(tied.state, "UP");
       assert.equal(tied.breakWidth, "50%");
       assert.equal(tied.spark, "50%");
@@ -270,12 +270,12 @@ describe("browser", { skip: playwrightAvailable ? false : "playwright is not ins
       }, null, { timeout: 8000 });
 
       const after = await readTaco();
-      // Fixers hold the left, so one break with no fixes empties their end and
-      // pushes the spark to the far left.
-      assert.match(after.br!, /^\(1 breaks\)\s+100%$/, after.br);
-      assert.match(after.fx!, /^0%\s+\(0 fixes\)$/, after.fx);
+      // Breakers hold the left, so one break with no fixes fills their end and
+      // pushes the spark to the far right.
+      assert.match(after.br!, /^100%\s+\(1 breaks\)$/, after.br);
+      assert.match(after.fx!, /^\(0 fixes\)\s+0%$/, after.fx);
       assert.equal(after.breakWidth, "100%");
-      assert.equal(after.spark, "0%", "the spark rides the boundary");
+      assert.equal(after.spark, "100%", "the spark rides the boundary");
       assert.equal(stubs[2].hits.length, 1, "the flip calls the service exactly once");
       assert.deepEqual(stubs[2].hits, ["off"]);
 
