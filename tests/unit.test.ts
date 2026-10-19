@@ -305,3 +305,103 @@ describe("the MCP server's control dialect", () => {
     assert.equal(getServices().find((s) => s.id === "mcp")?.adminToken, undefined);
   });
 });
+
+/*
+ * Queued/fulfilled counts, read from the stage screen.
+ *
+ * Against a real local server rather than a mocked undici: what breaks here is
+ * the shape of somebody else's JSON, and a mock would agree with whatever this
+ * code expects rather than with what the stage screen actually sends.
+ */
+describe("fetchOrderCounts", () => {
+  const servers: import("node:http").Server[] = [];
+
+  async function stageScreen(body: string, status = 200): Promise<number> {
+    const { createServer } = await import("node:http");
+    const { once } = await import("node:events");
+    const server = createServer((_req, res) => {
+      res.writeHead(status, { "content-type": "application/json" }).end(body);
+    });
+    servers.push(server);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    return (server.address() as { port: number }).port;
+  }
+
+  const snapshot = (queued: number, completed: number): string =>
+    JSON.stringify({
+      seq: 1,
+      orders_in_flight: queued,
+      scoreboard: { orders_completed: completed, worker_deaths: 0 },
+      board: { components: [] },
+    });
+
+  beforeEach(() => {
+    delete process.env.stage_url;
+  });
+
+  after(() => {
+    for (const server of servers) server.close();
+    delete process.env.stage_url;
+  });
+
+  it("returns null when no stage screen is configured", async () => {
+    const { fetchOrderCounts } = await import("../src/lib/orders");
+    assert.equal(await fetchOrderCounts(), null);
+  });
+
+  it("reads both numbers out of a real snapshot", async () => {
+    const port = await stageScreen(snapshot(47, 1179));
+    process.env.stage_url = `http://127.0.0.1:${port}`;
+
+    const { fetchOrderCounts } = await import("../src/lib/orders");
+    assert.deepEqual(await fetchOrderCounts(), { queued: 47, completed: 1179 });
+  });
+
+  it("keeps a legitimate zero", async () => {
+    // Guards the obvious bug: treating 0 as missing and returning null, which
+    // would make the counters vanish the moment a batch drains.
+    const port = await stageScreen(snapshot(0, 0));
+    process.env.stage_url = `http://127.0.0.1:${port}`;
+
+    const { fetchOrderCounts } = await import("../src/lib/orders");
+    assert.deepEqual(await fetchOrderCounts(), { queued: 0, completed: 0 });
+  });
+
+  it("returns null rather than NaN when a field is missing", async () => {
+    // Showing NaN on a few hundred phones is worse than showing nothing.
+    const port = await stageScreen(JSON.stringify({ seq: 1, scoreboard: {} }));
+    process.env.stage_url = `http://127.0.0.1:${port}`;
+
+    const { fetchOrderCounts } = await import("../src/lib/orders");
+    assert.equal(await fetchOrderCounts(), null);
+  });
+
+  it("returns null on a non-200 even when the body still parses", async () => {
+    // The body is a perfectly good snapshot; only the status says otherwise.
+    // An error page or a stale cached response that happens to parse is the
+    // case the status check exists for -- with a body that does NOT parse the
+    // NaN guard catches it anyway and this proves nothing.
+    const port = await stageScreen(snapshot(12, 340), 503);
+    process.env.stage_url = `http://127.0.0.1:${port}`;
+
+    const { fetchOrderCounts } = await import("../src/lib/orders");
+    assert.equal(await fetchOrderCounts(), null);
+  });
+
+  it("returns null, without throwing, when the stage screen is not there", async () => {
+    // The board has to keep working on a laptop with no stage screen running.
+    process.env.stage_url = "http://127.0.0.1:1";
+
+    const { fetchOrderCounts } = await import("../src/lib/orders");
+    assert.equal(await fetchOrderCounts(), null);
+  });
+
+  it("returns null on a body that is not JSON", async () => {
+    const port = await stageScreen("<html>bad gateway</html>");
+    process.env.stage_url = `http://127.0.0.1:${port}`;
+
+    const { fetchOrderCounts } = await import("../src/lib/orders");
+    assert.equal(await fetchOrderCounts(), null);
+  });
+});

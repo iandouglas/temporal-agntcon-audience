@@ -124,6 +124,18 @@ export function adminToken(): string | undefined {
   return env("admin_token");
 }
 
+/**
+ * The stage screen's origin, for the queued/fulfilled counters.
+ *
+ * It is the only service holding a Temporal client, so it is the only thing
+ * that knows these numbers. Unset means the counters are not rendered at all,
+ * which is the right default: a board showing a permanent 0 / 0 is worse than
+ * a board that does not mention orders.
+ */
+export function stageUrl(): string | undefined {
+  return normalizeBase(env("stage_url"));
+}
+
 export function redisUrl(): string | undefined {
   return env("REDIS_URL") ?? env("REDIS_PRIVATE_URL") ?? env("redis_url");
 }

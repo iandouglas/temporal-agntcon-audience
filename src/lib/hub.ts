@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Bus } from "./bus";
 import { createBus } from "./bus";
-import { getServices, redisUrl, validateServices } from "./config";
+import { getServices, redisUrl, stageUrl, validateServices } from "./config";
+import { fetchOrderCounts, type OrderCounts } from "./orders";
 import { dispatchToggle, probeAll } from "./dispatch";
 import { TokenBucket } from "./ratelimit";
 import type {
@@ -25,6 +26,9 @@ const SEED_LOCK_TTL_SECONDS = 30;
 /** Tap counts are noisy; batch them rather than publishing per tap. */
 const TAP_FLUSH_MS = 500;
 const CONN_HEARTBEAT_MS = 3000;
+// The stage screen throttles its own order count to one query every 2s, so
+// polling faster than this re-reads a number that has not moved.
+const ORDERS_POLL_MS = 2000;
 
 export interface Client {
   /** True for the token-gated /control page, which receives stats as well as state. */
@@ -56,6 +60,10 @@ export class Hub {
    * operator opens the floor.
    */
   private armed = false;
+  // Last good read from the stage screen. Null until one lands, and left at
+  // the last good value if a later read fails -- a counter that blanks every
+  // time a poll times out is worse than one that is a couple of seconds old.
+  private orders: OrderCounts | null = null;
   private taps: Record<string, number> = {};
   private pendingTaps: Record<string, number> = {};
   private lastDispatch: Record<string, DispatchResult | null> = {};
@@ -185,6 +193,13 @@ export class Hub {
     this.timers.push(setInterval(() => void this.flushTaps(), TAP_FLUSH_MS));
     this.timers.push(setInterval(() => void this.announceConns(), CONN_HEARTBEAT_MS));
     this.timers.push(setInterval(() => this.broadcastStats(), 1000));
+    // Matches the stage screen's own 2s throttle on counting orders; polling
+    // faster would just re-read the same numbers. Each replica polls for
+    // itself, which is a plain GET and cheaper than coordinating.
+    if (stageUrl()) {
+      void this.pollOrders();
+      this.timers.push(setInterval(() => void this.pollOrders(), ORDERS_POLL_MS));
+    }
     // 10Hz is smoother than the eye needs and costs each phone ~10 frames a
     // second instead of one per vote from the whole room.
     this.timers.push(setInterval(() => void this.flushVotes(), 120));
@@ -720,6 +735,10 @@ export class Hub {
       names: this.getNames(),
       role: client.role,
       armed: this.armed,
+      // In the hello too, not only on the next poll: a phone that joins
+      // mid-batch should see the backlog immediately rather than show nothing
+      // for the first couple of seconds.
+      orders: this.orders,
       ts: Date.now(),
     });
     if (client.control) this.sendStats(client);
@@ -733,6 +752,27 @@ export class Hub {
 
   private broadcast(message: ServerMessage): void {
     for (const client of this.clients) client.send(message);
+  }
+
+  /**
+   * Read the queued/fulfilled counts and push them to every phone.
+   *
+   * Only broadcasts on a change. The numbers sit still between batches, and
+   * re-sending them twice a second to a room full of phones is traffic that
+   * buys nothing.
+   */
+  private async pollOrders(): Promise<void> {
+    const counts = await fetchOrderCounts();
+    if (!counts) return;
+    if (
+      this.orders &&
+      this.orders.queued === counts.queued &&
+      this.orders.completed === counts.completed
+    ) {
+      return;
+    }
+    this.orders = counts;
+    this.broadcast({ t: "orders", orders: counts, ts: Date.now() });
   }
 
   private broadcastStats(): void {
