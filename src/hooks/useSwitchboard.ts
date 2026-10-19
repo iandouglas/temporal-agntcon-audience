@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BusStatus, DispatchResult, PublicService, Role, ServerMessage, StateMap, TallyMap } from "../lib/types";
+import type { BusStatus, DispatchResult, OrdersStopped, PublicService, Role, ServerMessage, StateMap, TallyMap } from "../lib/types";
 
 export interface Stats {
   conns: number;
@@ -34,6 +34,8 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
   const [ready, setReady] = useState(false);
   const [connected, setConnected] = useState(false);
   const [armed, setArmed] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopResult, setStopResult] = useState<OrdersStopped | null>(null);
   const [role, setRole] = useState<Role>("breaker");
   // Seeded from the server-rendered props, then kept live by the socket, so a
   // rename lands on every phone without a reload.
@@ -102,6 +104,10 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
           case "full":
             setState(message.state);
             setReady(true);
+            break;
+          case "orders-stopped":
+            setStopping(false);
+            setStopResult(message);
             break;
           case "armed":
             setArmed(message.v);
@@ -185,6 +191,18 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
   /** Operator only: zero the tap counts and last-call history everywhere. */
   const resetCounters = useCallback((): void => send({ t: "reset-counters" }), [send]);
 
+  /**
+   * Operator only: terminate every running order on the stage screen.
+   *
+   * Kept well away from `resetCounters`. That one is a mid-talk tool for
+   * unsticking a rigid bar; this one ends durable work and cannot be undone.
+   */
+  const stopOrders = useCallback((): void => {
+    setStopping(true);
+    setStopResult(null);
+    send({ t: "stop-orders" });
+  }, [send]);
+
   /** Operator only: rename a service for the whole room, with no redeploy. */
   const setName = useCallback(
     (id: string, name: string): void => send({ t: "set-name", id, name }),
@@ -194,5 +212,6 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
   return {
     state, tallies, names, role, ready, connected, armed, stats,
     vote, toggle, force, arm, resetCounters, setName,
+    stopOrders, stopping, stopResult,
   };
 }

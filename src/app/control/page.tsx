@@ -1,4 +1,4 @@
-import { adminToken, getPublicServices, tokensMatch } from "../../lib/config";
+import { adminToken, canStopOrders, getPublicServices, tokensMatch } from "../../lib/config";
 import { ControlPanel } from "./ControlPanel";
 
 export const dynamic = "force-dynamic";
@@ -34,5 +34,11 @@ export default async function ControlPage({
     );
   }
 
-  return <ControlPanel services={getPublicServices()} token={token as string} />;
+  return (
+    <ControlPanel
+      services={getPublicServices()}
+      token={token as string}
+      canStopOrders={canStopOrders()}
+    />
+  );
 }

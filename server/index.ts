@@ -3,6 +3,7 @@ import type { Duplex } from "node:stream";
 import next from "next";
 import { WebSocketServer, type WebSocket } from "ws";
 import { adminToken, tokensMatch } from "../src/lib/config";
+import { stopAllOrders } from "../src/lib/stage";
 import { closeDispatcher, poolStats } from "../src/lib/dispatch";
 import { Hub, type Client } from "../src/lib/hub";
 import { TokenBucket } from "../src/lib/ratelimit";
@@ -293,6 +294,16 @@ function attach(ws: WebSocket, hub: Hub, control: boolean, role: Role): void {
       typeof message.name === "string"
     ) {
       void hub.setName(message.id, message.name);
+      return;
+    }
+
+    // Ends running orders on the stage screen. Control-only, and answered
+    // straight back to the asker rather than broadcast: the audience cannot
+    // act on it and the number would mean nothing on a phone.
+    if (message.t === "stop-orders" && control) {
+      void stopAllOrders().then((result) => {
+        client.send({ t: "orders-stopped", ...result, ts: Date.now() });
+      });
       return;
     }
 
