@@ -124,6 +124,30 @@ export function adminToken(): string | undefined {
   return env("admin_token");
 }
 
+/**
+ * The stage screen's origin, for STOP ALL ORDERS.
+ *
+ * It is the only thing in this repo that holds a Temporal client, so ending
+ * running orders has to go through it. Unset means the button is not rendered
+ * at all: a control that cannot do anything is worse on stage than one that is
+ * missing, because you find out which by pressing it.
+ */
+export function stageUrl(): string | undefined {
+  return normalizeBase(env("stage_url"));
+}
+
+/**
+ * Bearer for the stage screen's terminate endpoint. Its other routes are open;
+ * that one ends running work, so it is gated and refuses when unset.
+ */
+export function stageAdminToken(): string | undefined {
+  return env("stage_admin_token");
+}
+
+export function canStopOrders(): boolean {
+  return Boolean(stageUrl() && stageAdminToken());
+}
+
 export function redisUrl(): string | undefined {
   return env("REDIS_URL") ?? env("REDIS_PRIVATE_URL") ?? env("redis_url");
 }

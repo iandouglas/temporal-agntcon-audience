@@ -305,3 +305,192 @@ describe("the MCP server's control dialect", () => {
     assert.equal(getServices().find((s) => s.id === "mcp")?.adminToken, undefined);
   });
 });
+
+/*
+ * STOP ALL ORDERS: the audience-site half.
+ *
+ * Exercised against a real local HTTP server rather than a mocked undici,
+ * because the things most likely to break here are the wire details -- the
+ * bearer header, the path, and what happens to a non-200 -- and a mock would
+ * agree with whatever the code does.
+ */
+describe("stopAllOrders", () => {
+  // Every stub this block starts, so they can all be closed. Holding only the
+  // most recent one orphaned the rest, and a listening server keeps Node's
+  // event loop alive -- the suite ran green and then hung forever.
+  const servers: import("node:http").Server[] = [];
+  let seen: { auth?: string; method?: string; path?: string } = {};
+
+  async function stageScreen(
+    handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void,
+  ): Promise<number> {
+    const { createServer } = await import("node:http");
+    const { once } = await import("node:events");
+    const server = createServer((req, res) => {
+      seen = {
+        auth: req.headers.authorization,
+        method: req.method,
+        path: req.url,
+      };
+      handler(req, res);
+    });
+    servers.push(server);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    return (server.address() as { port: number }).port;
+  }
+
+  beforeEach(() => {
+    seen = {};
+    delete process.env.stage_url;
+    delete process.env.stage_admin_token;
+  });
+
+  after(() => {
+    for (const server of servers) server.close();
+    delete process.env.stage_url;
+    delete process.env.stage_admin_token;
+  });
+
+  it("refuses, without calling anything, when it is not configured", async () => {
+    const { stopAllOrders } = await import("../src/lib/stage");
+    const result = await stopAllOrders();
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /stage_url and stage_admin_token/);
+    assert.equal(seen.method, undefined, "nothing should have been called");
+  });
+
+  it("refuses when only one of the two is set", async () => {
+    process.env.stage_url = "http://127.0.0.1:1";
+    const { stopAllOrders } = await import("../src/lib/stage");
+
+    const result = await stopAllOrders();
+    assert.equal(result.ok, false);
+  });
+
+  it("posts to the terminate endpoint with a bearer, and reads the counts", async () => {
+    const port = await stageScreen((_req, res) => {
+      res
+        .writeHead(200, { "content-type": "application/json" })
+        .end(JSON.stringify({ terminated: 47, failed: 0, passes: 2, error: "", submitting: false }));
+    });
+    process.env.stage_url = `http://127.0.0.1:${port}`;
+    process.env.stage_admin_token = "s3cret";
+
+    const { stopAllOrders } = await import("../src/lib/stage");
+    const result = await stopAllOrders();
+
+    assert.equal(seen.method, "POST");
+    assert.equal(seen.path, "/api/orders/terminate");
+    assert.equal(seen.auth, "Bearer s3cret");
+    assert.deepEqual(result, {
+      ok: true, terminated: 47, failed: 0, submitting: false, error: "",
+    });
+  });
+
+  it("carries the still-submitting warning through", async () => {
+    const port = await stageScreen((_req, res) => {
+      res
+        .writeHead(200, { "content-type": "application/json" })
+        .end(JSON.stringify({ terminated: 3, failed: 0, submitting: true, error: "" }));
+    });
+    process.env.stage_url = `http://127.0.0.1:${port}`;
+    process.env.stage_admin_token = "s3cret";
+
+    const { stopAllOrders } = await import("../src/lib/stage");
+    const result = await stopAllOrders();
+
+    assert.equal(result.submitting, true, "operator must be told more orders are still arriving");
+  });
+
+  it("surfaces the stage screen's own words on a 401", async () => {
+    const port = await stageScreen((_req, res) => {
+      res.writeHead(401, { "content-type": "application/json" }).end('{"error":"unauthorised"}');
+    });
+    process.env.stage_url = `http://127.0.0.1:${port}`;
+    process.env.stage_admin_token = "wrong";
+
+    const { stopAllOrders } = await import("../src/lib/stage");
+    const result = await stopAllOrders();
+
+    assert.equal(result.ok, false);
+    // A bare "401" sends you looking in the wrong place; the body says which
+    // side disagrees about the token.
+    assert.match(result.error, /401/);
+    assert.match(result.error, /unauthorised/);
+  });
+
+  it("surfaces the 503 you get when the stage screen has no token set", async () => {
+    const port = await stageScreen((_req, res) => {
+      res.writeHead(503).end('{"error":"STAGE_ADMIN_TOKEN is not set, so this endpoint is disabled"}');
+    });
+    process.env.stage_url = `http://127.0.0.1:${port}`;
+    process.env.stage_admin_token = "s3cret";
+
+    const { stopAllOrders } = await import("../src/lib/stage");
+    const result = await stopAllOrders();
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /STAGE_ADMIN_TOKEN/);
+  });
+
+  it("does not throw when the stage screen is unreachable", async () => {
+    // Port 1 on loopback: nothing is listening, and connecting fails fast.
+    process.env.stage_url = "http://127.0.0.1:1";
+    process.env.stage_admin_token = "s3cret";
+
+    const { stopAllOrders } = await import("../src/lib/stage");
+    const result = await stopAllOrders();
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /could not reach the stage screen/);
+  });
+
+  it("does not throw on a body that is not JSON", async () => {
+    const port = await stageScreen((_req, res) => {
+      res.writeHead(200, { "content-type": "text/html" }).end("<html>proxy error</html>");
+    });
+    process.env.stage_url = `http://127.0.0.1:${port}`;
+    process.env.stage_admin_token = "s3cret";
+
+    const { stopAllOrders } = await import("../src/lib/stage");
+    const result = await stopAllOrders();
+
+    assert.equal(result.ok, false);
+  });
+});
+
+describe("canStopOrders", () => {
+  beforeEach(() => {
+    delete process.env.stage_url;
+    delete process.env.stage_admin_token;
+  });
+
+  after(() => {
+    delete process.env.stage_url;
+    delete process.env.stage_admin_token;
+  });
+
+  it("is false unless both the URL and the token are set", async () => {
+    const { canStopOrders } = await import("../src/lib/config");
+
+    assert.equal(canStopOrders(), false);
+
+    process.env.stage_url = "http://stage:8900";
+    assert.equal(canStopOrders(), false, "a URL with no token cannot call the endpoint");
+
+    delete process.env.stage_url;
+    process.env.stage_admin_token = "s3cret";
+    assert.equal(canStopOrders(), false, "a token with no URL has nowhere to go");
+
+    process.env.stage_url = "http://stage:8900";
+    assert.equal(canStopOrders(), true);
+  });
+
+  it("strips a trailing slash so the path does not double up", async () => {
+    const { stageUrl } = await import("../src/lib/config");
+    process.env.stage_url = "http://stage:8900/";
+    assert.equal(stageUrl(), "http://stage:8900");
+  });
+});

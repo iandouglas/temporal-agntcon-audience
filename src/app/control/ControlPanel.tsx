@@ -15,6 +15,13 @@ const AUDIENCE_GATE: PublicService = {
 interface Props {
   services: PublicService[];
   token: string;
+  /**
+   * Whether the stage screen is reachable for STOP ALL ORDERS. Decided on the
+   * server, because it depends on env vars the browser must never see. False
+   * hides the button entirely: a control that cannot do anything is worse on
+   * stage than a missing one, because you find out which by pressing it.
+   */
+  canStopOrders: boolean;
 }
 
 function describe(result: DispatchResult | null | undefined): string {
@@ -24,8 +31,11 @@ function describe(result: DispatchResult | null | undefined): string {
   return `/${result.path} → ${result.status} (${result.ms}ms) ${when}`;
 }
 
-export function ControlPanel({ services, token }: Props) {
-  const { state, names, connected, armed, stats, force, arm, resetCounters, setName } = useSwitchboard(
+export function ControlPanel({ services, token, canStopOrders }: Props) {
+  const {
+    state, names, connected, armed, stats, force, arm, resetCounters, setName,
+    stopOrders, stopping, stopResult,
+  } = useSwitchboard(
     services,
     { control: true, token },
   );
@@ -60,6 +70,20 @@ export function ControlPanel({ services, token }: Props) {
    */
   function setAll(value: boolean): void {
     for (const service of services) force(service.id, value);
+  }
+
+  /**
+   * Deliberately not part of RESET COUNTERS. That button is reached for
+   * mid-talk to unstick a rigid bar; this one ends durable work and cannot be
+   * undone, so it confirms first and says what it did afterwards.
+   */
+  function confirmStopOrders(): void {
+    const warning =
+      "Terminate every order still running?\n\n" +
+      "This ends work that is in flight. It cannot be undone, and it is not " +
+      "what you want mid-demo -- surviving this is the thing being shown.";
+    if (!window.confirm(warning)) return;
+    stopOrders();
   }
 
   async function reseed(): Promise<void> {
@@ -128,6 +152,32 @@ export function ControlPanel({ services, token }: Props) {
       <button type="button" className="btn btn--counters" onClick={resetCounters}>
         RESET COUNTERS
       </button>
+
+      {canStopOrders ? (
+        <>
+          <button
+            type="button"
+            className="btn btn--danger"
+            onClick={confirmStopOrders}
+            disabled={stopping}
+          >
+            {stopping ? "STOPPING..." : "STOP ALL ORDERS"}
+          </button>
+          {stopResult ? (
+            <p className="ctl-alert" data-bad={!stopResult.ok || stopResult.failed > 0}>
+              {stopResult.ok
+                ? `Terminated ${stopResult.terminated} order${stopResult.terminated === 1 ? "" : "s"}.`
+                : `Could not stop orders: ${stopResult.error}`}
+              {stopResult.ok && stopResult.failed > 0
+                ? ` ${stopResult.failed} would not stop: ${stopResult.error}`
+                : ""}
+              {stopResult.ok && stopResult.submitting
+                ? " A batch is still being submitted, so more orders are still arriving. Press STOP on the stage screen first, then run this again."
+                : ""}
+            </p>
+          ) : null}
+        </>
+      ) : null}
 
       {stats && !stats.bus.healthy ? (
         <p className="ctl-alert">

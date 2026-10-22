@@ -595,6 +595,26 @@ body {
   opacity: 0.8;
 }
 
+/*
+ * STOP ALL ORDERS. Carries the break colour on purpose: it is the one control
+ * here that destroys durable work, and it sits directly under RESET COUNTERS,
+ * which is harmless and gets pressed mid-talk. They must not look alike.
+ */
+.btn--danger {
+  width: 100%;
+  margin: -8px 0 18px;
+  padding: 10px;
+  font-size: 11px;
+  color: var(--break-bright);
+  border-color: var(--break);
+  background: rgba(212, 61, 61, 0.08);
+}
+
+.btn--danger:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
 
 /* ---- role badge --------------------------------------------------------- */
 
