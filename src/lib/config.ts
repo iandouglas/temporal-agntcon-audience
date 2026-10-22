@@ -125,15 +125,28 @@ export function adminToken(): string | undefined {
 }
 
 /**
- * The stage screen's origin, for the queued/fulfilled counters.
+ * The stage screen's origin, for the queued/fulfilled counters and STOP ALL
+ * ORDERS.
  *
  * It is the only service holding a Temporal client, so it is the only thing
- * that knows these numbers. Unset means the counters are not rendered at all,
- * which is the right default: a board showing a permanent 0 / 0 is worse than
- * a board that does not mention orders.
+ * that knows these numbers or can end running orders. Unset means neither the
+ * counters nor the button are rendered: a board showing a permanent 0 / 0, or a
+ * control that cannot do anything, is worse on stage than one that is missing.
  */
 export function stageUrl(): string | undefined {
   return normalizeBase(env("stage_url"));
+}
+
+/**
+ * Bearer for the stage screen's terminate endpoint. Its other routes are open;
+ * that one ends running work, so it is gated and refuses when unset.
+ */
+export function stageAdminToken(): string | undefined {
+  return env("stage_admin_token");
+}
+
+export function canStopOrders(): boolean {
+  return Boolean(stageUrl() && stageAdminToken());
 }
 
 export function redisUrl(): string | undefined {

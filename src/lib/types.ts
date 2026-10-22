@@ -105,6 +105,7 @@ export type ClientMessage =
   | { t: "vote"; id: string }
   | { t: "set-name"; id: string; name: string }
   | { t: "reset-counters" }
+  | { t: "stop-orders" }
   | { t: "ping" };
 
 /** Queued and fulfilled order counts, read from the stage screen. */
@@ -139,4 +140,20 @@ export type ServerMessage =
       dispatch: Record<string, DispatchResult | null>;
       bus: BusStatus;
     }
+  | {
+      /**
+       * Result of STOP ALL ORDERS. Sent only to the control client that asked,
+       * because the audience has no reason to see it and no way to act on it.
+       */
+      t: "orders-stopped";
+      ok: boolean;
+      terminated: number;
+      failed: number;
+      submitting: boolean;
+      error: string;
+      ts: number;
+    }
   | { t: "pong" };
+
+/** The STOP ALL ORDERS reply, named so the control panel can hold one. */
+export type OrdersStopped = Extract<ServerMessage, { t: "orders-stopped" }>;
