@@ -877,3 +877,60 @@ body {
   font-size: 0.85em;
   opacity: 0.75;
 }
+
+/*
+ * Queued vs fulfilled, read from the stage screen.
+ *
+ * Two numbers side by side so the gap between them is the thing you see,
+ * which is the point: queued climbing while fulfilled lags is the backlog the
+ * room just created. "queued" pulses while it is non-zero so a growing
+ * backlog is visible from the corner of the eye, mid-tap.
+ */
+.orders {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.orders-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.orders-n {
+  font-variant-numeric: tabular-nums;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Only while there is a backlog; a settled board should not twitch. */
+.orders-n[data-busy="true"] {
+  color: var(--break-bright);
+  animation: orders-pulse 1.4s ease-in-out infinite;
+}
+
+.orders-k {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+
+@keyframes orders-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orders-n[data-busy="true"] {
+    animation: none;
+  }
+}

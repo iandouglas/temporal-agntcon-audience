@@ -11,7 +11,7 @@ interface Props {
 }
 
 export function SwitchBoard({ services, title, subtitle }: Props) {
-  const { tallies, names, role, ready, connected, armed, vote } = useSwitchboard(services);
+  const { tallies, names, role, ready, connected, armed, orders, vote } = useSwitchboard(services);
   const live = ready && connected;
   const interactive = live && armed;
 
@@ -50,6 +50,31 @@ export function SwitchBoard({ services, title, subtitle }: Props) {
           </span>
         </p>
       </header>
+
+      {/*
+        * The backlog, in everyone's hand rather than only on the projector.
+        * The gap between the two numbers is the argument the demo is making,
+        * so it is worth showing to the people creating it.
+        *
+        * Rendered only once real numbers have arrived: no stage screen
+        * configured, or none reachable yet, and the row stays away entirely.
+        * A permanent 0 / 0 reads as "nothing is happening" during the exact
+        * beat where plenty is.
+        */}
+      {orders ? (
+        <section className="orders" aria-live="polite">
+          <div className="orders-cell">
+            <span className="orders-n" data-busy={orders.queued > 0}>
+              {orders.queued.toLocaleString()}
+            </span>
+            <span className="orders-k">queued</span>
+          </div>
+          <div className="orders-cell">
+            <span className="orders-n">{orders.completed.toLocaleString()}</span>
+            <span className="orders-k">fulfilled</span>
+          </div>
+        </section>
+      ) : null}
 
       <section className="tier-mcp">
         {path.map((service) => (

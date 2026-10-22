@@ -125,12 +125,13 @@ export function adminToken(): string | undefined {
 }
 
 /**
- * The stage screen's origin, for STOP ALL ORDERS.
+ * The stage screen's origin, for the queued/fulfilled counters and STOP ALL
+ * ORDERS.
  *
- * It is the only thing in this repo that holds a Temporal client, so ending
- * running orders has to go through it. Unset means the button is not rendered
- * at all: a control that cannot do anything is worse on stage than one that is
- * missing, because you find out which by pressing it.
+ * It is the only service holding a Temporal client, so it is the only thing
+ * that knows these numbers or can end running orders. Unset means neither the
+ * counters nor the button are rendered: a board showing a permanent 0 / 0, or a
+ * control that cannot do anything, is worse on stage than one that is missing.
  */
 export function stageUrl(): string | undefined {
   return normalizeBase(env("stage_url"));

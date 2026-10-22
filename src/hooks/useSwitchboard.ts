@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BusStatus, DispatchResult, OrdersStopped, PublicService, Role, ServerMessage, StateMap, TallyMap } from "../lib/types";
+import type { BusStatus, DispatchResult, OrderCounts, OrdersStopped, PublicService, Role, ServerMessage, StateMap, TallyMap } from "../lib/types";
 
 export interface Stats {
   conns: number;
@@ -34,6 +34,7 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
   const [ready, setReady] = useState(false);
   const [connected, setConnected] = useState(false);
   const [armed, setArmed] = useState(false);
+  const [orders, setOrders] = useState<OrderCounts | null>(null);
   const [stopping, setStopping] = useState(false);
   const [stopResult, setStopResult] = useState<OrdersStopped | null>(null);
   const [role, setRole] = useState<Role>("breaker");
@@ -93,6 +94,7 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
             setRole(message.role);
             setArmed(message.armed);
             armedRef.current = message.armed;
+            setOrders(message.orders);
             setReady(true);
             break;
           case "tallies":
@@ -104,6 +106,9 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
           case "full":
             setState(message.state);
             setReady(true);
+            break;
+          case "orders":
+            setOrders(message.orders);
             break;
           case "orders-stopped":
             setStopping(false);
@@ -210,7 +215,7 @@ export function useSwitchboard(services: PublicService[], options: Options = {})
   );
 
   return {
-    state, tallies, names, role, ready, connected, armed, stats,
+    state, tallies, names, role, ready, connected, armed, stats, orders,
     vote, toggle, force, arm, resetCounters, setName,
     stopOrders, stopping, stopResult,
   };

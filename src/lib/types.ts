@@ -108,6 +108,12 @@ export type ClientMessage =
   | { t: "stop-orders" }
   | { t: "ping" };
 
+/** Queued and fulfilled order counts, read from the stage screen. */
+export interface OrderCounts {
+  queued: number;
+  completed: number;
+}
+
 /** Server -> browser. */
 export type ServerMessage =
   | {
@@ -117,6 +123,7 @@ export type ServerMessage =
       names: Record<string, string>;
       role: Role;
       armed: boolean;
+      orders: OrderCounts | null;
       ts: number;
     }
   | { t: "tallies"; tallies: TallyMap; ts: number }
@@ -125,6 +132,7 @@ export type ServerMessage =
   | { t: "armed"; v: boolean; ts: number }
   | { t: "names"; names: Record<string, string>; ts: number }
   | { t: "full"; state: StateMap; ts: number }
+  | { t: "orders"; orders: OrderCounts | null; ts: number }
   | {
       t: "stats";
       conns: number;
